@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+@theme {
+  /* Pastel, low-saturation base palette — the site stays quiet so Ditto can be loud. */
+  --color-canvas: #fbfaf8;
+  --color-surface: #ffffff;
+  --color-ink: #241f2e;
+  --color-ink-soft: #5b5468;
+  --color-line: #ece7ee;
+
+  --color-pastel-pink: #f6d9e8;
+  --color-pastel-lilac: #e3daf5;
+  --color-pastel-blue: #dbe9f5;
+  --color-pastel-mint: #dcf0e6;
+  --color-pastel-sand: #f5ecd9;
+
+  /* Ditto's signature saturated pink/purple — reserved for the cursor + its accents. */
+  --color-ditto: #c026d3;
+  --color-ditto-dark: #8b1aa0;
+  --color-ditto-light: #f0abfc;
+
+  --font-display: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-pixel: "Press Start 2P", "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-body);
+    /* TODO(blob-cursor step): once the blob cursor component mounts, switch this to
+       `cursor: none` (desktop/hover-capable only — leave touch devices on the real cursor). */
+  }
+
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+  }
+}
