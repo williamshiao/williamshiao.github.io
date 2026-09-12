@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { gsap } from "gsap";
 import { pointOnRoundedRect, smoothClosedPath, type Vec2 } from "./blobMath";
 import {
+  applyShapeMatching,
   collideWalls,
   createBlobMesh,
   integrate,
@@ -35,7 +36,7 @@ import {
  */
 
 const PERIMETER_COUNT = 14;
-const REST_RADIUS = 42;
+const REST_RADIUS = 58;
 const NODE_MASS = 1;
 const CENTER_MASS = 2.2;
 
@@ -46,6 +47,13 @@ const RING_STIFFNESS = 0.3;
 const SPOKE_STIFFNESS = 0.22;
 const BEND_STIFFNESS = 0.15;
 const CONSTRAINT_ITERATIONS = 5;
+// Pulls the ring toward a rigidly-rotated copy of its rest shape every
+// frame (see blobPhysics.applyShapeMatching) — this is what actually stops
+// it from folding on itself; bend constraints alone weren't enough. Kept
+// low so it reads as "stay coherent" rather than "stay rigid". Faded out
+// during hover-mold (scaled by 1-blend below) so it doesn't fight molding
+// into a rectangle.
+const SHAPE_MATCH_STIFFNESS = 0.2;
 
 const ANCHOR_PULL_STRENGTH = 0.35;
 const HOVER_PULL_STRENGTH = 0.45;
@@ -64,9 +72,9 @@ const MAX_SANE_SPAN = REST_RADIUS * 6;
 // A few fixed, asymmetric nubs on specific perimeter nodes — Ditto's stubby
 // ragdoll limbs — expressed as extra rest length on that node's spoke.
 const LIMB_BUMPS = [
-  { index: 3, amount: 14 },
-  { index: 7, amount: 11 },
-  { index: 10, amount: 13 },
+  { index: 3, amount: 19 },
+  { index: 7, amount: 15 },
+  { index: 10, amount: 18 },
 ];
 
 const SHAPE_CORNER_RADIUS = 16;
@@ -127,6 +135,46 @@ export function BlobCursor() {
     let hoverMode: HoverMode = "shape";
     let tintedEl: HTMLElement | null = null;
 
+    // A managed "ghost label": a plain white copy of a covered button's
+    // text, appended directly to <body> so it's a sibling of this SVG at
+    // the top level. This is necessary, not cosmetic — TabBar's own wrapper
+    // has `position: absolute; z-index: 50`, which creates a stacking
+    // context, and CSS confines a descendant's z-index to *within* its
+    // nearest ancestor stacking context. No z-index on the button itself
+    // could ever out-rank this SVG's z-999, because the whole TabBar div is
+    // compared against it as one z-50 unit. Rendering the label as this
+    // SVG's own sibling sidesteps that entirely.
+    const labelEl = document.createElement("div");
+    labelEl.setAttribute("aria-hidden", "true");
+    Object.assign(labelEl.style, {
+      position: "fixed",
+      zIndex: "1000",
+      pointerEvents: "none",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      color: "#ffffff",
+      opacity: "0",
+      transition: "opacity 0.15s ease",
+      whiteSpace: "nowrap",
+    } satisfies Partial<CSSStyleDeclaration>);
+    document.body.appendChild(labelEl);
+    let labelTarget: HTMLElement | null = null;
+
+    function syncLabel(target: HTMLElement) {
+      const rect = target.getBoundingClientRect();
+      const cs = getComputedStyle(target);
+      labelEl.style.left = `${rect.left}px`;
+      labelEl.style.top = `${rect.top}px`;
+      labelEl.style.width = `${rect.width}px`;
+      labelEl.style.height = `${rect.height}px`;
+      labelEl.style.fontFamily = cs.fontFamily;
+      labelEl.style.fontSize = cs.fontSize;
+      labelEl.style.fontWeight = cs.fontWeight;
+      labelEl.style.letterSpacing = cs.letterSpacing;
+      labelEl.textContent = target.textContent;
+    }
+
     const mesh: BlobMesh = createBlobMesh(
       mouse.x,
       mouse.y,
@@ -145,6 +193,11 @@ export function BlobCursor() {
       if (!tintedEl) return;
       tintedEl.style.color = "";
       tintedEl = null;
+    }
+
+    function hideLabel() {
+      labelEl.style.opacity = "0";
+      labelTarget = null;
     }
 
     function morphTo(target: Element | null) {
@@ -168,11 +221,31 @@ export function BlobCursor() {
       });
 
       if (target instanceof HTMLElement && hoverMode === "text") {
+        hideLabel();
         clearTint();
         target.style.transition = "color 0.18s ease";
         target.style.color = HOVER_COLOR;
         tintedEl = target;
+      } else if (target instanceof HTMLButtonElement) {
+        // Shape mode covers the element solidly — its own label would
+        // vanish under Ditto's fill without this. A plain tint can't fix
+        // it (see the ghost-label comment above), so swap in the overlay.
+        clearTint();
+        labelTarget = target;
+        syncLabel(target);
+        labelEl.style.opacity = "1";
+      } else if (target instanceof HTMLElement) {
+        // Other shape targets (e.g. artwork tiles): fall back to a plain
+        // tint. It won't reach a child's own explicit color class (artwork
+        // captions set their own), but it's harmless and better than
+        // nothing for simple cases.
+        hideLabel();
+        clearTint();
+        target.style.transition = "color 0.18s ease";
+        target.style.color = "#ffffff";
+        tintedEl = target;
       } else {
+        hideLabel();
         clearTint();
       }
     }
@@ -230,6 +303,7 @@ export function BlobCursor() {
 
       integrate(mesh, GRAVITY, DAMPING, MAX_STEP);
       satisfyConstraints(mesh, pulls, CONSTRAINT_ITERATIONS);
+      applyShapeMatching(mesh, SHAPE_MATCH_STIFFNESS * (1 - blend));
       if (wallRect) collideWalls(mesh, wallRect, WALL_MARGIN);
 
       const span = ringSpan(mesh);
@@ -243,6 +317,10 @@ export function BlobCursor() {
         ring[i].y = node.y;
       }
       path.setAttribute("d", smoothClosedPath(ring));
+
+      // Keep the ghost label glued to its button in case of any layout
+      // shift while hovering (e.g. a panel-open animation moving things).
+      if (labelTarget) syncLabel(labelTarget);
 
       // Avoid a flash of the blob sitting at the viewport center before the
       // first real pointer position arrives.
@@ -259,6 +337,7 @@ export function BlobCursor() {
       cancelAnimationFrame(frameId);
       blendTween?.kill();
       clearTint();
+      labelEl.remove();
       document.removeEventListener("pointermove", handlePointerMove);
       document.removeEventListener("pointerover", handlePointerOver);
       document.removeEventListener("pointerout", handlePointerOut);

@@ -45,6 +45,10 @@ export interface BlobMesh {
   centerIndex: number;
   /** The perimeter node the cursor pinches and drags. */
   anchorIndex: number;
+  /** Each perimeter node's offset from the ring's centroid in the rest
+   * pose, index-aligned with `perimeter`. Used by applyShapeMatching to
+   * build a goal shape that can never itself be self-intersecting. */
+  restOffsets: { x: number; y: number }[];
 }
 
 export interface RingBump {
@@ -109,7 +113,72 @@ export function createBlobMesh(
     constraints.push({ a, b, restLength, stiffness: config.bendStiffness });
   }
 
-  return { nodes, constraints, perimeter, centerIndex: 0, anchorIndex: perimeter[0] };
+  let restCx = 0;
+  let restCy = 0;
+  for (const idx of perimeter) {
+    restCx += nodes[idx].x;
+    restCy += nodes[idx].y;
+  }
+  restCx /= perimeterCount;
+  restCy /= perimeterCount;
+  const restOffsets = perimeter.map((idx) => ({ x: nodes[idx].x - restCx, y: nodes[idx].y - restCy }));
+
+  return { nodes, constraints, perimeter, centerIndex: 0, anchorIndex: perimeter[0], restOffsets };
+}
+
+/**
+ * Shape matching (Müller et al., "Meshless Deformation Based on Shape
+ * Matching"): finds the best-fit rotation between the ring's current point
+ * cloud and its rest pose, then pulls each node toward that rotated-and-
+ * translated rest position by `stiffness`. This is what actually stops the
+ * ring from folding on itself — bend constraints resist *local* folding,
+ * but nothing about plain distance constraints forbids a global inversion
+ * that still satisfies most individual distances well enough. A rotated
+ * copy of the rest shape can't itself be self-intersecting, so pulling
+ * toward it is a strong, principled anti-fold correction, while still
+ * leaving the distance constraints free to squish/stretch locally (shape
+ * matching only fights *rotation*, not the elastic deformation itself).
+ * Call with a low stiffness (e.g. 0.1-0.2) — this is a coherence nudge on
+ * top of the local elasticity, not a replacement for it.
+ */
+export function applyShapeMatching(mesh: BlobMesh, stiffness: number) {
+  if (stiffness <= 0) return;
+  const n = mesh.perimeter.length;
+  let cx = 0;
+  let cy = 0;
+  for (const idx of mesh.perimeter) {
+    cx += mesh.nodes[idx].x;
+    cy += mesh.nodes[idx].y;
+  }
+  cx /= n;
+  cy /= n;
+
+  // Best-fit 2D rotation between the rest offsets and the current offsets
+  // (a simplified Kabsch/Procrustes solve — closed-form in 2D via atan2).
+  let sumCross = 0;
+  let sumDot = 0;
+  for (let i = 0; i < n; i++) {
+    const node = mesh.nodes[mesh.perimeter[i]];
+    const curX = node.x - cx;
+    const curY = node.y - cy;
+    const restX = mesh.restOffsets[i].x;
+    const restY = mesh.restOffsets[i].y;
+    sumCross += restX * curY - restY * curX;
+    sumDot += restX * curX + restY * curY;
+  }
+  const angle = Math.atan2(sumCross, sumDot);
+  const cosA = Math.cos(angle);
+  const sinA = Math.sin(angle);
+
+  for (let i = 0; i < n; i++) {
+    const node = mesh.nodes[mesh.perimeter[i]];
+    const restX = mesh.restOffsets[i].x;
+    const restY = mesh.restOffsets[i].y;
+    const goalX = cx + (restX * cosA - restY * sinA);
+    const goalY = cy + (restX * sinA + restY * cosA);
+    node.x += (goalX - node.x) * stiffness;
+    node.y += (goalY - node.y) * stiffness;
+  }
 }
 
 /** Bounding-box span of the ring — used to detect a degenerate/collapsed shape. */
