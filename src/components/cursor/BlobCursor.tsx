@@ -1,54 +1,71 @@
 import { useEffect, useRef } from "react";
 import { gsap } from "gsap";
-import { pointOnRoundedRect, smoothClosedPath, type Vec2 } from "./blobMath";
+import {
+  DEFAULT_LIMB_BUMPS,
+  pointOnRoundedRect,
+  smoothClosedPath,
+  teardropRingPoint,
+  type Vec2,
+} from "./blobMath";
 
 /**
- * The blob is a ring of points, each independently spring-chasing a target,
- * rendered as one smooth closed path (see blobMath). Two target functions:
+ * Ditto's idle shape comes from two physics points, not many independent
+ * ones (see blobMath's comment for why): a "head" that tracks the cursor
+ * fairly closely, and a "body" that hangs below it on a much softer spring.
+ * When the head moves quickly, the body — heavier, more damped — falls
+ * behind and to the side, tilting the head->body "spine" off vertical.
+ * That tilt is what reads as Ditto swaying from the cursor's momentum
+ * (a plumb bob effect) instead of the whole outline rippling.
  *
- * - Idle: every point targets a position offset from the mouse by an angle
- *   around a teardrop-shaped radius function — tight near the top (the
- *   "pinch" where the cursor holds it) and bulging at the bottom. Per-point
- *   spring stiffness follows the same top->bottom gradient (tight/fast at
- *   the top, loose/laggy at the bottom), which is this implementation's take
- *   on the brief's "leading points target the mouse, trailing points lag
- *   behind" — instead of a literal point-to-point chain, lag is expressed as
- *   a stiffness gradient around one ring, which stays well-defined when the
- *   same ring later needs to mold onto a rectangle. A constant gravity
- *   accel is added every frame (idle only); since spring force at
- *   equilibrium is stiffness * offset, the already-loose bottom points sag
- *   further under the same constant force — gravity and lag reinforce each
- *   other for free.
- * - Hover: every point targets an arc-length-even position on the hovered
- *   element's rounded-rect perimeter, with a single higher uniform
- *   stiffness (no gravity) so it snaps into the shape and holds it.
+ * A ring of points is generated fresh every frame from that spine (teardrop
+ * width profile + a few fixed limb bumps, see blobMath), so there's no
+ * per-outline-point lag to fight — only the head/body pair carries physics.
  *
- * A transient stiffness multiplier spikes on every mode change (hover
- * in/out) and decays back down — that's the "rapidly molds" snap and the
- * "pops back" on release.
+ * Hovering a `[data-blob-target]` element blends the ring (via a single
+ * eased 0->1 value, not per-point springs) from that idle shape to the
+ * element's rounded-rect perimeter, and eases back on leave.
  */
 
-const POINT_COUNT = 12;
-const REST_RADIUS_MIN = 9;
-const REST_RADIUS_MAX = 30;
-const REST_CENTER_OFFSET_Y = 12;
+const POINT_COUNT = 20;
+const BASE_RADIUS = 19; // half-width of the teardrop at its widest
+const REST_DROOP = 64; // idle head-to-body distance — taller than wide, a hanging drop
+const MIN_SPINE = REST_DROOP * 0.65;
+const MAX_SPINE = REST_DROOP * 1.35;
+
+const HEAD_STIFFNESS = 0.3;
+const HEAD_DAMPING = 0.82;
+const BODY_STIFFNESS = 0.045;
+const BODY_DAMPING = 0.9;
+const MAX_SPEED = 120; // px/frame safety clamp against pathological jumps
+
 const HOVER_CORNER_RADIUS = 16;
-const STIFFNESS_TOP = 0.34;
-const STIFFNESS_BOTTOM = 0.09;
-const HOVER_STIFFNESS = 0.4;
-const DAMPING = 0.76;
-const GRAVITY = 0.55;
-const MAX_SPEED = 100; // px/frame safety clamp — see the comment at its use below
+const HOVER_IN_DURATION = 0.18;
+const HOVER_OUT_DURATION = 0.5;
 
 // Keep in sync with the --color-ditto* tokens in index.css.
 const REST_COLOR = "#f0abfc";
 const HOVER_COLOR = "#c026d3";
 
-interface RingPoint {
+interface SpringPoint {
   x: number;
   y: number;
   vx: number;
   vy: number;
+}
+
+function springStep(p: SpringPoint, targetX: number, targetY: number, stiffness: number, damping: number) {
+  p.vx += (targetX - p.x) * stiffness;
+  p.vy += (targetY - p.y) * stiffness;
+  p.vx *= damping;
+  p.vy *= damping;
+  const speed = Math.hypot(p.vx, p.vy);
+  if (speed > MAX_SPEED) {
+    const scale = MAX_SPEED / speed;
+    p.vx *= scale;
+    p.vy *= scale;
+  }
+  p.x += p.vx;
+  p.y += p.vy;
 }
 
 export function BlobCursor() {
@@ -79,49 +96,22 @@ export function BlobCursor() {
     let hasMouse = false;
     let hoverEl: Element | null = null;
 
-    const stiffnessMultiplier = { value: 1 };
-    let boostTween: gsap.core.Tween | null = null;
+    const head: SpringPoint = { x: mouse.x, y: mouse.y, vx: 0, vy: 0 };
+    const body: SpringPoint = { x: mouse.x, y: mouse.y + REST_DROOP, vx: 0, vy: 0 };
 
-    const points: RingPoint[] = Array.from({ length: POINT_COUNT }, () => ({
-      x: mouse.x,
-      y: mouse.y,
-      vx: 0,
-      vy: 0,
-    }));
-
-    function idleTarget(index: number): Vec2 {
-      const angle = (index / POINT_COUNT) * Math.PI * 2;
-      const downFactor = (Math.sin(angle) + 1) / 2; // 0 at top, 1 at bottom
-      const radius = REST_RADIUS_MIN + (REST_RADIUS_MAX - REST_RADIUS_MIN) * Math.pow(downFactor, 1.4);
-      return {
-        x: mouse.x + Math.cos(angle) * radius,
-        y: mouse.y + REST_CENTER_OFFSET_Y + Math.sin(angle) * radius,
-      };
-    }
-
-    function stiffnessFor(index: number): number {
-      if (hoverEl) return HOVER_STIFFNESS * stiffnessMultiplier.value;
-      const angle = (index / POINT_COUNT) * Math.PI * 2;
-      const downFactor = (Math.sin(angle) + 1) / 2;
-      const base = STIFFNESS_TOP + (STIFFNESS_BOTTOM - STIFFNESS_TOP) * downFactor;
-      return base * stiffnessMultiplier.value;
-    }
-
-    function targetFor(index: number): Vec2 {
-      if (hoverEl) {
-        const rect = hoverEl.getBoundingClientRect();
-        return pointOnRoundedRect(rect, HOVER_CORNER_RADIUS, index / POINT_COUNT);
-      }
-      return idleTarget(index);
-    }
+    const hoverBlend = { value: 0 };
+    let blendTween: gsap.core.Tween | null = null;
 
     function morphTo(target: Element | null) {
       if (target === hoverEl) return;
       hoverEl = target;
 
-      boostTween?.kill();
-      stiffnessMultiplier.value = 1.7;
-      boostTween = gsap.to(stiffnessMultiplier, { value: 1, duration: 0.35, ease: "power2.out" });
+      blendTween?.kill();
+      blendTween = gsap.to(hoverBlend, {
+        value: target ? 1 : 0,
+        duration: target ? HOVER_IN_DURATION : HOVER_OUT_DURATION,
+        ease: target ? "power2.out" : "back.out(1.6)",
+      });
 
       gsap.to(path, {
         attr: { fill: target ? HOVER_COLOR : REST_COLOR },
@@ -157,31 +147,47 @@ export function BlobCursor() {
 
     path.setAttribute("fill", REST_COLOR);
 
+    const ring: Vec2[] = Array.from({ length: POINT_COUNT }, () => ({ x: head.x, y: head.y }));
+
     let frameId: number;
     let visible = false;
     function tick() {
-      for (let i = 0; i < POINT_COUNT; i++) {
-        const p = points[i];
-        const t = targetFor(i);
-        const k = stiffnessFor(i);
-        p.vx += (t.x - p.x) * k;
-        p.vy += (t.y - p.y) * k;
-        if (!hoverEl) p.vy += GRAVITY * (1 - k / STIFFNESS_TOP); // looser points sag more
-        p.vx *= DAMPING;
-        p.vy *= DAMPING;
-        // Guards against a pathological whip/stretch if the target ever jumps a
-        // long distance in one frame (e.g. the tab regaining focus after being
-        // backgrounded with a stale mouse position, or a monitor-spanning flick).
-        const speed = Math.hypot(p.vx, p.vy);
-        if (speed > MAX_SPEED) {
-          const scale = MAX_SPEED / speed;
-          p.vx *= scale;
-          p.vy *= scale;
-        }
-        p.x += p.vx;
-        p.y += p.vy;
+      const rect = hoverEl ? hoverEl.getBoundingClientRect() : null;
+
+      // Head chases the cursor (or the hovered element's center); body
+      // chases a fixed offset below the head's *current* position, on a
+      // much softer spring — that lag is the sway.
+      const headTargetX = rect ? rect.x + rect.width / 2 : mouse.x;
+      const headTargetY = rect ? rect.y + rect.height / 2 : mouse.y;
+      springStep(head, headTargetX, headTargetY, HEAD_STIFFNESS, HEAD_DAMPING);
+      springStep(body, head.x, head.y + REST_DROOP, BODY_STIFFNESS, BODY_DAMPING);
+
+      let dx = body.x - head.x;
+      let dy = body.y - head.y;
+      let len = Math.hypot(dx, dy);
+      if (len < 0.0001) {
+        dx = 0;
+        dy = 1;
+        len = 1;
       }
-      path.setAttribute("d", smoothClosedPath(points));
+      const tailDir: Vec2 = { x: dx / len, y: dy / len };
+      const spineLength = Math.max(MIN_SPINE, Math.min(MAX_SPINE, len));
+
+      const blend = Math.max(0, Math.min(1, hoverBlend.value));
+
+      for (let i = 0; i < POINT_COUNT; i++) {
+        const idle = teardropRingPoint(i, POINT_COUNT, head, tailDir, spineLength, BASE_RADIUS, DEFAULT_LIMB_BUMPS);
+        if (rect && blend > 0) {
+          const onRect = pointOnRoundedRect(rect, HOVER_CORNER_RADIUS, i / POINT_COUNT);
+          ring[i].x = idle.x + (onRect.x - idle.x) * blend;
+          ring[i].y = idle.y + (onRect.y - idle.y) * blend;
+        } else {
+          ring[i].x = idle.x;
+          ring[i].y = idle.y;
+        }
+      }
+
+      path.setAttribute("d", smoothClosedPath(ring));
 
       // Avoid a flash of the blob sitting at the viewport center before the
       // first real pointer position arrives.
@@ -196,7 +202,7 @@ export function BlobCursor() {
 
     return () => {
       cancelAnimationFrame(frameId);
-      boostTween?.kill();
+      blendTween?.kill();
       document.removeEventListener("pointermove", handlePointerMove);
       document.removeEventListener("pointerover", handlePointerOver);
       document.removeEventListener("pointerout", handlePointerOut);
