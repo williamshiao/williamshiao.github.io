@@ -20,31 +20,64 @@ import {
  * A ring of points is generated fresh every frame from that spine (teardrop
  * width profile + a few fixed limb bumps, see blobMath), so there's no
  * per-outline-point lag to fight — only the head/body pair carries physics.
+ * A small secondary "jiggle" scalar, kicked by sudden changes in the head's
+ * velocity and spring-damped back to zero, pulses the body's radius —
+ * that's the jelly/fluid wobble on top of the droop + sway.
+ *
+ * The head's target is clamped to the terrarium's inner bounds (see
+ * `[data-terrarium-bounds]`) before the spring chases it, and the head's
+ * resting position is hard-clamped there too as a backstop — Ditto cannot
+ * cross the terrarium walls.
  *
  * Hovering a `[data-blob-target]` element blends the ring (via a single
- * eased 0->1 value, not per-point springs) from that idle shape to the
- * element's rounded-rect perimeter, and eases back on leave.
+ * eased 0->1 value, not per-point springs) from the idle shape to the
+ * element's rounded-rect perimeter, and eases back on leave. Two flavors,
+ * chosen by the attribute's value:
+ * - `data-blob-target` / `="shape"`: Ditto solidly covers the element (nav
+ *   tabs, artwork tiles) — he's "become" that control.
+ * - `data-blob-target="text"`: Ditto hugs the text at low opacity (so it
+ *   stays legible) and the text itself recolors to the ditto color — he's
+ *   "attached" to it, not hiding it.
  */
 
-const POINT_COUNT = 20;
-const BASE_RADIUS = 19; // half-width of the teardrop at its widest
-const REST_DROOP = 64; // idle head-to-body distance — taller than wide, a hanging drop
+const POINT_COUNT = 24;
+const BASE_RADIUS = 27; // half-width of the teardrop at its widest
+const REST_DROOP = 88; // idle head-to-body distance — taller than wide, a hanging drop
 const MIN_SPINE = REST_DROOP * 0.65;
 const MAX_SPINE = REST_DROOP * 1.35;
 
 const HEAD_STIFFNESS = 0.3;
 const HEAD_DAMPING = 0.82;
 const BODY_STIFFNESS = 0.045;
-const BODY_DAMPING = 0.9;
-const MAX_SPEED = 120; // px/frame safety clamp against pathological jumps
+const BODY_DAMPING = 0.87;
+const MAX_SPEED = 140; // px/frame safety clamp against pathological jumps
 
-const HOVER_CORNER_RADIUS = 16;
+// Jiggle: a 1D damped spring, kicked by sudden changes in the head's
+// velocity (jerk), that pulses the body's effective radius — Ditto's
+// jelly/surface-tension wobble after a sudden stop or direction change.
+const JIGGLE_KICK = 0.05;
+const JIGGLE_STIFFNESS = 0.22;
+const JIGGLE_DAMPING = 0.8;
+const JIGGLE_MAX = 0.4;
+
+// Wall collision: how far the head is kept from the terrarium's inner edge,
+// accounting for the body's typical extent below/beside it.
+const WALL_MARGIN_X = BASE_RADIUS * 1.5;
+const WALL_MARGIN_TOP = BASE_RADIUS * 0.6;
+const WALL_MARGIN_BOTTOM = MAX_SPINE + BASE_RADIUS;
+
+const SHAPE_CORNER_RADIUS = 16;
+const TEXT_CORNER_RADIUS = 8;
+const SHAPE_FILL_OPACITY = 1;
+const TEXT_FILL_OPACITY = 0.3;
 const HOVER_IN_DURATION = 0.18;
 const HOVER_OUT_DURATION = 0.5;
 
 // Keep in sync with the --color-ditto* tokens in index.css.
 const REST_COLOR = "#f0abfc";
 const HOVER_COLOR = "#c026d3";
+
+type HoverMode = "shape" | "text";
 
 interface SpringPoint {
   x: number;
@@ -66,6 +99,15 @@ function springStep(p: SpringPoint, targetX: number, targetY: number, stiffness:
   }
   p.x += p.vx;
   p.y += p.vy;
+}
+
+function readHoverMode(el: Element): HoverMode {
+  return el.getAttribute("data-blob-target") === "text" ? "text" : "shape";
+}
+
+function getTerrariumRect(): DOMRect | null {
+  const el = document.querySelector("[data-terrarium-bounds]");
+  return el ? el.getBoundingClientRect() : null;
 }
 
 export function BlobCursor() {
@@ -92,19 +134,38 @@ export function BlobCursor() {
     };
     setViewport();
 
+    let wallRect = getTerrariumRect();
+    const handleResize = () => {
+      setViewport();
+      wallRect = getTerrariumRect();
+    };
+
     const mouse: Vec2 = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
     let hasMouse = false;
     let hoverEl: Element | null = null;
+    let hoverMode: HoverMode = "shape";
+    let tintedEl: HTMLElement | null = null;
 
     const head: SpringPoint = { x: mouse.x, y: mouse.y, vx: 0, vy: 0 };
     const body: SpringPoint = { x: mouse.x, y: mouse.y + REST_DROOP, vx: 0, vy: 0 };
+    let jiggle = 0;
+    let jiggleVel = 0;
+    let prevHeadVx = 0;
+    let prevHeadVy = 0;
 
     const hoverBlend = { value: 0 };
     let blendTween: gsap.core.Tween | null = null;
 
+    function clearTint() {
+      if (!tintedEl) return;
+      tintedEl.style.color = "";
+      tintedEl = null;
+    }
+
     function morphTo(target: Element | null) {
       if (target === hoverEl) return;
       hoverEl = target;
+      hoverMode = target ? readHoverMode(target) : "shape";
 
       blendTween?.kill();
       blendTween = gsap.to(hoverBlend, {
@@ -113,11 +174,22 @@ export function BlobCursor() {
         ease: target ? "power2.out" : "back.out(1.6)",
       });
 
+      const fillColor = target ? HOVER_COLOR : REST_COLOR;
+      const fillOpacity = target && hoverMode === "text" ? TEXT_FILL_OPACITY : SHAPE_FILL_OPACITY;
       gsap.to(path, {
-        attr: { fill: target ? HOVER_COLOR : REST_COLOR },
+        attr: { fill: fillColor, "fill-opacity": fillOpacity },
         duration: 0.18,
         ease: "power1.out",
       });
+
+      if (target instanceof HTMLElement && hoverMode === "text") {
+        clearTint();
+        target.style.transition = "color 0.18s ease";
+        target.style.color = HOVER_COLOR;
+        tintedEl = target;
+      } else {
+        clearTint();
+      }
     }
 
     function handlePointerMove(e: PointerEvent) {
@@ -143,9 +215,10 @@ export function BlobCursor() {
     document.addEventListener("pointermove", handlePointerMove);
     document.addEventListener("pointerover", handlePointerOver);
     document.addEventListener("pointerout", handlePointerOut);
-    window.addEventListener("resize", setViewport);
+    window.addEventListener("resize", handleResize);
 
     path.setAttribute("fill", REST_COLOR);
+    path.setAttribute("fill-opacity", String(SHAPE_FILL_OPACITY));
 
     const ring: Vec2[] = Array.from({ length: POINT_COUNT }, () => ({ x: head.x, y: head.y }));
 
@@ -154,13 +227,58 @@ export function BlobCursor() {
     function tick() {
       const rect = hoverEl ? hoverEl.getBoundingClientRect() : null;
 
-      // Head chases the cursor (or the hovered element's center); body
-      // chases a fixed offset below the head's *current* position, on a
-      // much softer spring — that lag is the sway.
-      const headTargetX = rect ? rect.x + rect.width / 2 : mouse.x;
-      const headTargetY = rect ? rect.y + rect.height / 2 : mouse.y;
+      // Head chases the cursor (or the hovered element's center), clamped to
+      // the terrarium's inner bounds so it can't chase the mouse through a
+      // wall.
+      let headTargetX = rect ? rect.x + rect.width / 2 : mouse.x;
+      let headTargetY = rect ? rect.y + rect.height / 2 : mouse.y;
+      if (wallRect) {
+        headTargetX = Math.min(
+          Math.max(headTargetX, wallRect.left + WALL_MARGIN_X),
+          wallRect.right - WALL_MARGIN_X,
+        );
+        headTargetY = Math.min(
+          Math.max(headTargetY, wallRect.top + WALL_MARGIN_TOP),
+          wallRect.bottom - WALL_MARGIN_BOTTOM,
+        );
+      }
       springStep(head, headTargetX, headTargetY, HEAD_STIFFNESS, HEAD_DAMPING);
+
+      // Hard backstop in case spring overshoot would otherwise carry the
+      // head past the wall — zero the outward velocity component so it
+      // reads as a soft bump, not a rubber-band snap back.
+      if (wallRect) {
+        const minX = wallRect.left + WALL_MARGIN_X;
+        const maxX = wallRect.right - WALL_MARGIN_X;
+        const minY = wallRect.top + WALL_MARGIN_TOP;
+        const maxY = wallRect.bottom - WALL_MARGIN_BOTTOM;
+        if (head.x < minX) {
+          head.x = minX;
+          head.vx = Math.max(0, head.vx);
+        } else if (head.x > maxX) {
+          head.x = maxX;
+          head.vx = Math.min(0, head.vx);
+        }
+        if (head.y < minY) {
+          head.y = minY;
+          head.vy = Math.max(0, head.vy);
+        } else if (head.y > maxY) {
+          head.y = maxY;
+          head.vy = Math.min(0, head.vy);
+        }
+      }
+
       springStep(body, head.x, head.y + REST_DROOP, BODY_STIFFNESS, BODY_DAMPING);
+
+      // Jiggle: excited by how sharply the head's velocity just changed,
+      // pulled back to rest by its own small spring.
+      const jerk = Math.hypot(head.vx - prevHeadVx, head.vy - prevHeadVy);
+      prevHeadVx = head.vx;
+      prevHeadVy = head.vy;
+      jiggleVel += jerk * JIGGLE_KICK;
+      jiggleVel += (0 - jiggle) * JIGGLE_STIFFNESS;
+      jiggleVel *= JIGGLE_DAMPING;
+      jiggle = Math.max(-JIGGLE_MAX, Math.min(JIGGLE_MAX, jiggle + jiggleVel));
 
       let dx = body.x - head.x;
       let dy = body.y - head.y;
@@ -172,13 +290,15 @@ export function BlobCursor() {
       }
       const tailDir: Vec2 = { x: dx / len, y: dy / len };
       const spineLength = Math.max(MIN_SPINE, Math.min(MAX_SPINE, len));
+      const jiggledRadius = BASE_RADIUS * (1 + jiggle);
 
       const blend = Math.max(0, Math.min(1, hoverBlend.value));
+      const cornerRadius = hoverMode === "text" ? TEXT_CORNER_RADIUS : SHAPE_CORNER_RADIUS;
 
       for (let i = 0; i < POINT_COUNT; i++) {
-        const idle = teardropRingPoint(i, POINT_COUNT, head, tailDir, spineLength, BASE_RADIUS, DEFAULT_LIMB_BUMPS);
+        const idle = teardropRingPoint(i, POINT_COUNT, head, tailDir, spineLength, jiggledRadius, DEFAULT_LIMB_BUMPS);
         if (rect && blend > 0) {
-          const onRect = pointOnRoundedRect(rect, HOVER_CORNER_RADIUS, i / POINT_COUNT);
+          const onRect = pointOnRoundedRect(rect, cornerRadius, i / POINT_COUNT);
           ring[i].x = idle.x + (onRect.x - idle.x) * blend;
           ring[i].y = idle.y + (onRect.y - idle.y) * blend;
         } else {
@@ -203,10 +323,11 @@ export function BlobCursor() {
     return () => {
       cancelAnimationFrame(frameId);
       blendTween?.kill();
+      clearTint();
       document.removeEventListener("pointermove", handlePointerMove);
       document.removeEventListener("pointerover", handlePointerOver);
       document.removeEventListener("pointerout", handlePointerOut);
-      window.removeEventListener("resize", setViewport);
+      window.removeEventListener("resize", handleResize);
       document.body.style.cursor = previousCursor;
     };
   }, []);

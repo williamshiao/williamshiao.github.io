@@ -46,7 +46,12 @@ export function ContentPanel({ kicker, title, onClose, children }: PropsWithChil
           ×
         </button>
         <p className="font-pixel text-[10px] uppercase tracking-widest text-ditto">{kicker}</p>
-        <h2 className="mt-3 font-display text-2xl font-semibold text-ink sm:text-3xl">{title}</h2>
+        <h2
+          data-blob-target="text"
+          className="mt-3 inline-block font-display text-2xl font-semibold text-ink sm:text-3xl"
+        >
+          {title}
+        </h2>
         <div className="mt-6">{children}</div>
       </motion.div>
     </>

@@ -15,10 +15,16 @@ export function Hero() {
       />
 
       <div className="relative">
-        <p className="font-pixel text-xs uppercase tracking-widest text-ditto sm:text-sm">
+        <p
+          data-blob-target="text"
+          className="inline-block font-pixel text-xs uppercase tracking-widest text-ditto sm:text-sm"
+        >
           Software Engineer · Aspiring UI/UX Engineer
         </p>
-        <h1 className="mt-6 text-balance font-display text-7xl font-semibold tracking-tight text-ink sm:text-8xl lg:text-9xl">
+        <h1
+          data-blob-target="text"
+          className="mt-6 inline-block text-balance font-display text-7xl font-semibold tracking-tight text-ink sm:text-8xl lg:text-9xl"
+        >
           William Shiao
         </h1>
         <p className="mx-auto mt-8 max-w-xl text-balance text-lg text-ink-soft sm:text-xl">

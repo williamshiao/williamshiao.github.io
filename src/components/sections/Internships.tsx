@@ -6,7 +6,12 @@ export function Internships() {
       {internships.map((job) => (
         <article key={job.id} className="grid gap-4 sm:grid-cols-[180px_1fr]">
           <div>
-            <h3 className="font-display text-lg font-semibold text-ink">{job.company}</h3>
+            <h3
+              data-blob-target="text"
+              className="inline-block font-display text-lg font-semibold text-ink"
+            >
+              {job.company}
+            </h3>
             <p className="text-sm text-ink-soft">{job.role}</p>
             <p className="mt-1 text-xs text-ink-soft/80">
               {job.period} · {job.location}
