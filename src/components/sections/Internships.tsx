@@ -23,9 +23,9 @@ export function Internships() {
               ))}
             </ul>
             <div className="flex flex-wrap gap-2 pt-1">
-              {job.stack.map((tech) => (
+              {job.stack.map((tech, i) => (
                 <span
-                  key={tech}
+                  key={`${job.id}-stack-${i}`}
                   className="rounded-full bg-pastel-blue px-3 py-1 text-xs font-medium text-ink-soft"
                 >
                   {tech}

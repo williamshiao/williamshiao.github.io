@@ -35,8 +35,8 @@
     background-color: var(--color-canvas);
     color: var(--color-ink);
     font-family: var(--font-body);
-    /* TODO(blob-cursor step): once the blob cursor component mounts, switch this to
-       `cursor: none` (desktop/hover-capable only — leave touch devices on the real cursor). */
+    /* BlobCursor sets `cursor: none` itself (desktop/hover-capable only) once it
+       mounts, and restores this on unmount — nothing to do here. */
   }
 
   h1, h2, h3 {

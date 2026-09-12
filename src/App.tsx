@@ -4,6 +4,7 @@ import { Terrarium } from "./components/layout/Terrarium";
 import { TabBar } from "./components/layout/TabBar";
 import { ContentPanel } from "./components/layout/ContentPanel";
 import { Footer } from "./components/layout/Footer";
+import { BlobCursor } from "./components/cursor/BlobCursor";
 import { Hero } from "./components/sections/Hero";
 import { NAV_TABS, PANELS, type TabId } from "./config/tabs";
 
@@ -44,6 +45,8 @@ function App() {
           </ContentPanel>
         )}
       </AnimatePresence>
+
+      <BlobCursor />
     </div>
   );
 }
