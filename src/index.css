@@ -25,11 +25,13 @@
 }
 
 @layer base {
-  html {
-    scroll-behavior: smooth;
+  html, body {
+    height: 100%;
   }
 
   body {
+    overflow: hidden; /* fixed single-viewport "terrarium" — no page scroll */
+    overscroll-behavior: none;
     background-color: var(--color-canvas);
     color: var(--color-ink);
     font-family: var(--font-body);

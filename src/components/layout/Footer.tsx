@@ -1,10 +1,8 @@
 export function Footer() {
   return (
-    <footer className="border-t border-line px-6 py-10 text-center text-sm text-ink-soft">
-      <p>
-        {/* TODO(content): confirm contact links (email, LinkedIn, GitHub) */}
-        © {new Date().getFullYear()} William Shiao
-      </p>
-    </footer>
+    <div className="absolute bottom-6 right-6 z-20 text-xs text-ink-soft/70 sm:bottom-10 sm:right-10">
+      {/* TODO(content): confirm contact links (email, LinkedIn, GitHub) */}
+      © {new Date().getFullYear()} William Shiao
+    </div>
   );
 }
