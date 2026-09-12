@@ -1,8 +1,8 @@
-import type { TabConfig, TabId } from "../../config/tabs";
+import type { NavTab, TabId } from "../../config/tabs";
 
 interface TabBarProps {
-  tabs: TabConfig[];
-  activeTab: TabId | null;
+  tabs: NavTab[];
+  activeTab: TabId;
   onSelect: (id: TabId) => void;
 }
 
@@ -10,6 +10,8 @@ interface TabBarProps {
  * Floating tab dock, pinned to the top edge of the terrarium. Each tab is a
  * `data-blob-target` — the hook the cursor-blob component (built in a later
  * step) queries to know which elements it should mold itself around on hover.
+ * "About" reads as active whenever no panel is open — it's the home state,
+ * not a panel of its own.
  */
 export function TabBar({ tabs, activeTab, onSelect }: TabBarProps) {
   return (

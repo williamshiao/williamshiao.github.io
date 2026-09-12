@@ -16,7 +16,7 @@ export function ContentPanel({ kicker, title, onClose, children }: PropsWithChil
   return (
     <>
       <motion.div
-        className="absolute inset-0 z-30 bg-ink/10 backdrop-blur-[2px]"
+        className="absolute inset-0 z-30 bg-ink/20 backdrop-blur-md"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}

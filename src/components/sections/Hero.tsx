@@ -1,0 +1,33 @@
+// TODO(content): placeholder bio — replace with real copy once drafted.
+// This is the terrarium's resting/home state — the first thing a visitor
+// sees, so it carries far more visual weight than anything in the tab panels.
+export function Hero() {
+  return (
+    <div className="absolute inset-4 z-10 flex flex-col items-center justify-center overflow-hidden px-6 text-center sm:inset-10">
+      {/* Soft color-glow accents — the only decoration on an otherwise plain-type hero. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute h-[32rem] w-[32rem] rounded-full bg-pastel-pink/50 blur-3xl"
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute h-72 w-72 -translate-x-40 translate-y-24 rounded-full bg-pastel-blue/40 blur-3xl"
+      />
+
+      <div className="relative">
+        <p className="font-pixel text-xs uppercase tracking-widest text-ditto sm:text-sm">
+          Software Engineer · Aspiring UI/UX Engineer
+        </p>
+        <h1 className="mt-6 text-balance font-display text-7xl font-semibold tracking-tight text-ink sm:text-8xl lg:text-9xl">
+          William Shiao
+        </h1>
+        <p className="mx-auto mt-8 max-w-xl text-balance text-lg text-ink-soft sm:text-xl">
+          A software engineering graduate currently studying usability and UX at
+          Polytechnique Montréal — building things that are both technically solid and
+          genuinely pleasant to use.
+        </p>
+        {/* TODO(content): expand bio further, add a contact/CTA line once decided. */}
+      </div>
+    </div>
+  );
+}
