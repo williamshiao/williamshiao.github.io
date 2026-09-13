@@ -104,14 +104,6 @@ import { STRINGS, type Lang } from "../../i18n/strings";
 const { Engine, Bodies, Body, Composite, Query, Events } = Matter;
 
 const PLATE_SELECTOR = "[data-plate-bounds]";
-// Fewer small shapes than before — with a dozen of them bouncing around in
-// a confined space, collisions kept handing velocity back and forth and
-// the whole board read as too fast/chaotic even at the same base speed.
-// 6 of these slots are always the same fixed UI shapes (ditto, switch,
-// glow button, the two contact shapes, language) — see generateShapes —
-// leaving 3 genuinely random/decorative ones.
-const SMALL_SHAPE_COUNT = 9;
-const BIG_SHAPE_COUNT = 5;
 const WALL_THICKNESS = 100; // generous, so fast bodies can't tunnel through on one big step
 const CURSOR_RADIUS = 14;
 const CURSOR_MASS = 60; // heavy relative to the shapes — a paddle, not another puck
@@ -482,7 +474,12 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
     // a small random walk of initial velocity — Matter's own solver
     // untangles any initial overlap over the first few frames.
     const plateRect = getDocRect(PLATE_SELECTOR);
-    const shapes = generateShapes(SMALL_SHAPE_COUNT, BIG_SHAPE_COUNT);
+    // Sizes and decorative-shape counts both scale from the current
+    // viewport (see shapes.ts' computeShapeScale) — read once here at
+    // mount, same as everything else about the initial layout; resizing
+    // afterward adjusts the walls/floor (see handleResize above) but
+    // doesn't respawn shapes out from under whatever's already happening.
+    const shapes = generateShapes(window.innerWidth, window.innerHeight);
     const ns = "http://www.w3.org/2000/svg";
 
     function makeBlurFilter(id: string, stdDeviation: number): SVGFilterElement {
@@ -1127,7 +1124,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       const x = cx + Math.cos(angle) * spreadX * (0.5 + 0.5 * Math.random());
       const y = cy + Math.sin(angle) * spreadY * (0.5 + 0.5 * Math.random());
       const dir = Math.random() * Math.PI * 2;
-      const speed = i < SMALL_SHAPE_COUNT ? SPAWN_SPEED_SMALL : SPAWN_SPEED_BIG;
+      const speed = spec.sizeTier === "small" ? SPAWN_SPEED_SMALL : SPAWN_SPEED_BIG;
       const vx = Math.cos(dir) * speed;
       const vy = Math.sin(dir) * speed;
       if (spec.kind === "ditto") {

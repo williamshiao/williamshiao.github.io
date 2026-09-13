@@ -14,6 +14,14 @@
  * Any shape that gets a `pageId` (see ShapeSpec) must be forced to
  * `kind: "rect"` when it's created, and given a short `label` — see
  * generateShapes for where that happens for the current one.
+ *
+ * Every size (both the random ranges and the fixed UI shapes' own sizes)
+ * is scaled by generateShapes' viewport-derived `scale` — see
+ * computeShapeScale — so the whole board reads proportionally the same
+ * on a small phone as on a huge monitor, rather than the same fixed pixel
+ * sizes reading as tiny on one and cramped/oversized on the other. Shape
+ * *count* scales with it too, within its own bounds — more decorative
+ * clutter has room to breathe on a big screen, less on a small one.
  */
 
 export type ShapeKind =
@@ -48,6 +56,11 @@ export interface ShapeSpec {
   /** The short label FloatingShapes renders on top of a pageId shape once
    * it's clickable — what the user is actually about to open. */
   label?: string;
+  /** Which population this shape belongs to for spawn-speed purposes (see
+   * FloatingShapes) — not derivable from `interactive` alone, since the
+   * switch/bulb/contact/language shapes are small-sized but still
+   * `interactive: true`. */
+  sizeTier: "small" | "big";
   /** True for any shape whose click does something real (open a page,
    * flip a setting, follow a link) — as opposed to `interactive`, which
    * just means "eligible for hover darken" and is true for every big
@@ -103,54 +116,123 @@ interface SizeRange {
   triangle: [number, number];
 }
 
+// These ranges (and the fixed UI shapes' own sizes below) are tuned at
+// scale 1 — i.e. at REFERENCE_WIDTH x REFERENCE_HEIGHT — and multiplied
+// by the viewport-derived scale everywhere they're actually used.
 const SMALL_SIZE: SizeRange = { circle: [26, 42], rectHalf: [24, 38], triangle: [30, 46] };
 // Roughly 3x the small tier — unmistakably a different class of object, not
 // just "a slightly bigger circle".
 const BIG_SIZE: SizeRange = { circle: [95, 135], rectHalf: [80, 115], triangle: [100, 140] };
 
-function makeShape(id: string, interactive: boolean, range: SizeRange, forceKind?: ShapeKind): ShapeSpec {
+function scaleRange([min, max]: [number, number], scale: number): [number, number] {
+  return [min * scale, max * scale];
+}
+
+function makeShape(
+  id: string,
+  interactive: boolean,
+  sizeTier: "small" | "big",
+  range: SizeRange,
+  scale: number,
+  forceKind?: ShapeKind,
+): ShapeSpec {
   const kind = forceKind ?? pickKind();
   const color = randomColor();
   const rotation = randomBetween(-0.6, 0.6);
   if (kind === "rect") {
-    const [min, max] = range.rectHalf;
-    return { id, kind, color, size: randomBetween(min, max), size2: randomBetween(min, max), rotation, interactive };
+    const [min, max] = scaleRange(range.rectHalf, scale);
+    return {
+      id,
+      kind,
+      color,
+      size: randomBetween(min, max),
+      size2: randomBetween(min, max),
+      rotation,
+      interactive,
+      sizeTier,
+    };
   }
   if (kind === "triangle") {
-    const [min, max] = range.triangle;
-    return { id, kind, color, size: randomBetween(min, max), rotation, interactive };
+    const [min, max] = scaleRange(range.triangle, scale);
+    return { id, kind, color, size: randomBetween(min, max), rotation, interactive, sizeTier };
   }
-  const [min, max] = range.circle;
-  return { id, kind, color, size: randomBetween(min, max), interactive };
+  const [min, max] = scaleRange(range.circle, scale);
+  return { id, kind, color, size: randomBetween(min, max), interactive, sizeTier };
 }
 
-export function generateShapes(smallCount: number, bigCount: number): ShapeSpec[] {
-  const small = Array.from({ length: smallCount }, (_, i) => makeShape(`small-${i}`, false, SMALL_SIZE));
+// Reference viewport the fixed sizes/counts below are tuned at (scale 1)
+// — a common, roughly "typical desktop" size — clamped so the board
+// never shrinks to an unreadable smudge on a tiny phone or balloons to
+// comically large on an ultrawide/4K monitor.
+const REFERENCE_WIDTH = 1920;
+const REFERENCE_HEIGHT = 1080;
+const MIN_SCALE = 0.45;
+const MAX_SCALE = 1.6;
+
+/** A single linear scale factor derived from how the given viewport's
+ * *area* compares to the reference one (sqrt of the area ratio, since
+ * area scales with the square of a linear size) — applied to every
+ * shape's size, and to how many decorative shapes there are. */
+export function computeShapeScale(viewportWidth: number, viewportHeight: number): number {
+  const areaRatio = (viewportWidth * viewportHeight) / (REFERENCE_WIDTH * REFERENCE_HEIGHT);
+  const linear = Math.sqrt(areaRatio);
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, linear));
+}
+
+function clampCount(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+// Decorative-tier counts at scale 1 — matches what this project was
+// actually tuned/tested at, so a "typical desktop" visitor sees the same
+// board as before; everyone else's count scales proportionally from here.
+const BASE_DECORATIVE_SMALL = 3;
+const BASE_DECORATIVE_BIG = 4;
+
+/** Builds the full shape list for a given viewport: 6 fixed UI shapes
+ * (ditto, switch, glow button, the two contact shapes, language) plus the
+ * one pageId shape are always present regardless of size — those are
+ * real features, not filler — but the purely decorative population, and
+ * every shape's own size, scale with the viewport (see
+ * computeShapeScale). */
+export function generateShapes(viewportWidth: number, viewportHeight: number): ShapeSpec[] {
+  const scale = computeShapeScale(viewportWidth, viewportHeight);
+  const decorativeSmallCount = clampCount(BASE_DECORATIVE_SMALL * scale, 1, 6);
+  const decorativeBigCount = clampCount(BASE_DECORATIVE_BIG * scale, 2, 7);
+  // 6 fixed small shapes (ditto/switch/glow/email/code/language, filled
+  // in below) come first, then the decorative random ones.
+  const smallCount = 6 + decorativeSmallCount;
+  // 1 fixed pageId shape, then the decorative random ones.
+  const bigCount = 1 + decorativeBigCount;
+
+  const small = Array.from({ length: smallCount }, (_, i) => makeShape(`small-${i}`, false, "small", SMALL_SIZE, scale));
   // The first big shape is always a rect, not randomly picked — it's the
   // one that opens a real page (Internships, as a first pass — see
   // FloatingShapes' click-to-expand), and forcing it to already be the
   // same kind the expand animation turns everything into is what keeps
   // that transition seamless rather than snapping from round/triangular
   // to rectangular the instant it starts growing.
-  const big = Array.from({ length: bigCount }, (_, i) => makeShape(`big-${i}`, true, BIG_SIZE, i === 0 ? "rect" : undefined));
+  const big = Array.from({ length: bigCount }, (_, i) =>
+    makeShape(`big-${i}`, true, "big", BIG_SIZE, scale, i === 0 ? "rect" : undefined),
+  );
   if (big.length > 0) {
     big[0].pageId = "internships";
     big[0].label = "Internships";
   }
   // One guaranteed Ditto among the small tier, just for fun — always
   // present (not a random chance kind), always in the first small slot.
-  if (small.length > 0) small[0] = makeDittoShape();
+  if (small.length > 0) small[0] = makeDittoShape(scale);
   // One guaranteed light switch too, in the second slot — see
   // FloatingShapes' toggleNightMode.
-  if (small.length > 1) small[1] = makeLightSwitchShape();
+  if (small.length > 1) small[1] = makeLightSwitchShape(scale);
   // And a push-button that toggles the shape glow effect, in the third.
-  if (small.length > 2) small[2] = makeGlowButtonShape();
+  if (small.length > 2) small[2] = makeGlowButtonShape(scale);
   // Contact shapes — an envelope (email) and a code-brackets badge
   // (GitHub/portfolio code) — in the fourth and fifth slots.
-  if (small.length > 3) small[3] = makeContactEmailShape();
-  if (small.length > 4) small[4] = makeContactCodeShape();
+  if (small.length > 3) small[3] = makeContactEmailShape(scale);
+  if (small.length > 4) small[4] = makeContactCodeShape(scale);
   // And the language toggle, in the sixth.
-  if (small.length > 5) small[5] = makeLanguageToggleShape();
+  if (small.length > 5) small[5] = makeLanguageToggleShape(scale);
   return [...small, ...big];
 }
 
@@ -160,11 +242,18 @@ export function generateShapes(smallCount: number, bigCount: number): ShapeSpec[
  * the character's classic asymmetric face — one oval eye, one flat line
  * eye, a wavy mouth.
  */
-export function makeDittoShape(): ShapeSpec {
-  const [min, max] = SMALL_SIZE.circle;
+export function makeDittoShape(scale: number): ShapeSpec {
+  const [min, max] = scaleRange(SMALL_SIZE.circle, scale);
   // A touch bigger than a typical small shape so it actually reads as
   // "someone drew a face on this" rather than disappearing into the mix.
-  return { id: "ditto", kind: "ditto", color: "#f0abfc", size: randomBetween(min, max) * 1.15, interactive: false };
+  return {
+    id: "ditto",
+    kind: "ditto",
+    color: "#f0abfc",
+    size: randomBetween(min, max) * 1.15,
+    interactive: false,
+    sizeTier: "small",
+  };
 }
 
 /**
@@ -176,15 +265,16 @@ export function makeDittoShape(): ShapeSpec {
  * `color` is a CSS var rather than a literal color so its plate always
  * matches the site's *current* surface tone, light or dark.
  */
-export function makeLightSwitchShape(): ShapeSpec {
+export function makeLightSwitchShape(scale: number): ShapeSpec {
   return {
     id: "light-switch",
     kind: "switch",
     color: "var(--color-surface)",
-    size: 24,
-    size2: 28,
+    size: 24 * scale,
+    size2: 28 * scale,
     interactive: true,
     hasClickAction: true,
+    sizeTier: "small",
   };
 }
 
@@ -196,14 +286,15 @@ export function makeLightSwitchShape(): ShapeSpec {
  * treatment as the switch, and for the same reason: `color` is the
  * base's CSS-var fill, always matching the site's current surface tone.
  */
-export function makeGlowButtonShape(): ShapeSpec {
+export function makeGlowButtonShape(scale: number): ShapeSpec {
   return {
     id: "glow-button",
     kind: "glow-button",
     color: "var(--color-surface)",
-    size: 24,
+    size: 24 * scale,
     interactive: true,
     hasClickAction: true,
+    sizeTier: "small",
   };
 }
 
@@ -218,16 +309,17 @@ const GITHUB_URL = "https://github.com/your-username";
  * nothing sent automatically). Same "always present, fixed size, stencil
  * icon" treatment as the switch/bulb.
  */
-export function makeContactEmailShape(): ShapeSpec {
+export function makeContactEmailShape(scale: number): ShapeSpec {
   return {
     id: "contact-email",
     kind: "contact-email",
     color: "var(--color-surface)",
-    size: 22,
-    size2: 26,
+    size: 22 * scale,
+    size2: 26 * scale,
     interactive: true,
     hasClickAction: true,
     href: `mailto:${CONTACT_EMAIL}`,
+    sizeTier: "small",
   };
 }
 
@@ -237,15 +329,16 @@ export function makeContactEmailShape(): ShapeSpec {
  * plain code-brackets glyph says "see my code" just as clearly without
  * reproducing anyone's trademark.
  */
-export function makeContactCodeShape(): ShapeSpec {
+export function makeContactCodeShape(scale: number): ShapeSpec {
   return {
     id: "contact-code",
     kind: "contact-code",
     color: "var(--color-surface)",
-    size: 24,
+    size: 24 * scale,
     interactive: true,
     hasClickAction: true,
     href: GITHUB_URL,
+    sizeTier: "small",
   };
 }
 
@@ -255,13 +348,14 @@ export function makeContactCodeShape(): ShapeSpec {
  * short code (EN/FR) rendered directly on the icon, the same way the
  * switch/bulb show their own on/off state.
  */
-export function makeLanguageToggleShape(): ShapeSpec {
+export function makeLanguageToggleShape(scale: number): ShapeSpec {
   return {
     id: "language-toggle",
     kind: "language-toggle",
     color: "var(--color-surface)",
-    size: 24,
+    size: 24 * scale,
     interactive: true,
     hasClickAction: true,
+    sizeTier: "small",
   };
 }
