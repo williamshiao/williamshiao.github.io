@@ -44,8 +44,8 @@ import { STRINGS, type Lang } from "../../i18n/strings";
  * restarts immediately instead of shapes just sitting wherever gravity
  * left them.
  *
- * Clicking the one shape tagged with a `pageId` (see ./shapes — always
- * forced to `kind: "rect"`, so growing it never has to visibly snap from
+ * Clicking any shape tagged with a `pageId` (see ./shapes — always forced
+ * to `kind: "rect"`, so growing it never has to visibly snap from
  * round/triangular to rectangular the instant it starts) once settled
  * grows it in place — via Body.scale + Body.setPosition each frame, so
  * it's a real collider the whole time and physically shoves every other
@@ -64,7 +64,12 @@ import { STRINGS, type Lang } from "../../i18n/strings";
  * opacity snap the moment gravity engages. The system cursor turns into
  * a pointer over anything that really does something on click (a pageId
  * shape, the switch, the glow button), not just anything that merely
- * darkens on hover.
+ * darkens on hover. The Internships shape specifically also opens
+ * *itself* the instant it lands, no click needed — see the same
+ * handleFloorCollision — as a one-time demonstration that clicking a
+ * shape does something real, rather than leaving a visitor to discover
+ * that on their own; Contact (below) doesn't get that same auto-open,
+ * just the regular click.
  *
  * A second special shape — a small rocker-switch rectangle (see
  * makeLightSwitchShape) — toggles the site's night mode on click: flips
@@ -87,14 +92,18 @@ import { STRINGS, type Lang } from "../../i18n/strings";
  * spawnGlowButton) — toggles that whole glow layer on/off, the same
  * click path as the switch and the pageId panel.
  *
- * Three more: an envelope and a `</>` code badge (see
- * makeContactEmailShape/makeContactCodeShape) open a mailto: link and a
- * GitHub profile respectively, and a little globe (see
- * makeLanguageToggleShape/toggleLanguage) flips the site's language —
- * FloatingShapes owns reading/writing that choice (localStorage, same as
- * night mode/glow) and just reports the new value up via
- * onToggleLanguage so LanguageProvider (see context/LanguageContext.tsx),
- * which owns the actual translated copy, knows to re-render.
+ * A second pageId shape, Contact, works exactly like Internships (see
+ * above) — it's what an envelope shape and a `</>` code-badge shape used
+ * to be, before they were folded into one real page instead of firing off
+ * a mailto: link and a GitHub tab directly; see ../sections/Contact.tsx
+ * for what's actually inside once it's open.
+ *
+ * One more: a little globe (see makeLanguageToggleShape/toggleLanguage)
+ * flips the site's language — FloatingShapes owns reading/writing that
+ * choice (localStorage, same as night mode/glow) and just reports the new
+ * value up via onToggleLanguage so LanguageProvider (see
+ * context/LanguageContext.tsx), which owns the actual translated copy,
+ * knows to re-render.
  *
  * Matter.js (MIT) rather than custom code: rigid-body elastic collision
  * among several bodies is its home turf. Position/size/color are generated
@@ -162,11 +171,14 @@ const HOVER_FILTER = "brightness(0.72)";
 // opacity change on it (hiding again, expand/shrink) stays snappy.
 const LABEL_REVEAL_MS = 1400;
 const LABEL_HIDE_MS = 200;
-// How long after landing the one shape with a real page behind it (see
-// handleFloorCollision) waits before opening on its own — long enough for
-// its label to finish fading in first, so the beat reads as "falls, lands,
-// label lights up, *then* blooms open" rather than everything at once.
-const AUTO_EXPAND_DELAY_MS = 1800;
+// A page shape opens itself the instant it lands (see handleFloorCollision)
+// — 0ms, not actually synchronous: it's still deferred a tick via
+// setTimeout rather than called straight from the collision callback, since
+// that callback runs *inside* Matter's own Engine.update, and beginExpand
+// mutates the world (swaps the body) — doing that reentrantly, mid-step,
+// is asking for trouble. A macrotask later is still well within the same
+// frame the user sees, so it reads as instant.
+const AUTO_EXPAND_DELAY_MS = 0;
 
 // Every shape's soft color glow — see the intro comment for how the
 // overlap-blending actually works. Modeled on the Hero's own background
@@ -273,9 +285,9 @@ function updateClipShapeElement(
     );
     return;
   }
-  // rect/switch/contact-email/contact-code/ditto — all rectangular
-  // colliders (see createShapeBody). Sharp corners rather than chamfered;
-  // a small approximation that doesn't matter at this scale.
+  // rect/switch/ditto — all rectangular colliders (see createShapeBody).
+  // Sharp corners rather than chamfered; a small approximation that
+  // doesn't matter at this scale.
   const hw = spec.size * KNOCKOUT_CLIP_SHRINK;
   const hh = (spec.size2 ?? spec.size) * KNOCKOUT_CLIP_SHRINK;
   const corners: [number, number][] = [
@@ -309,7 +321,7 @@ function createShapeBody(spec: ShapeSpec, x: number, y: number): Matter.Body {
     const half = spec.size * DITTO_BODY_HALF_EXTENT_RATIO;
     return Bodies.rectangle(x, y, half * 2, half * 2, { ...common, chamfer: { radius: half * 0.3 } });
   }
-  if (spec.kind === "switch" || spec.kind === "rect" || spec.kind === "contact-email" || spec.kind === "contact-code") {
+  if (spec.kind === "switch" || spec.kind === "rect") {
     return Bodies.rectangle(x, y, spec.size * 2, (spec.size2 ?? spec.size) * 2, {
       ...common,
       chamfer: { radius: Math.min(spec.size, spec.size2 ?? spec.size) * 0.35 },
@@ -727,12 +739,13 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       languageToggle.textEl.textContent = currentLang.toUpperCase();
     }
 
-    // Only the Internships shape has a translatable label right now, so
-    // this is a small hardcoded lookup rather than threading a labelKey
-    // through ShapeSpec for just one entry — revisit if a second page
-    // shows up.
-    function pageLabelKeyFor(pageId: string): "internshipsLabel" | null {
-      return pageId === "internships" ? "internshipsLabel" : null;
+    // A small hardcoded lookup rather than threading a labelKey through
+    // ShapeSpec — there are only ever as many entries here as there are
+    // real pages.
+    function pageLabelKeyFor(pageId: string): "internshipsLabel" | "contactLabel" | null {
+      if (pageId === "internships") return "internshipsLabel";
+      if (pageId === "contact") return "contactLabel";
+      return null;
     }
 
     function toggleLanguage() {
@@ -755,10 +768,21 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
     // Pushes a label (or the null placeholder) for the shape just added
     // at the end of bodies/specs/etc — called once per spawn, from every
     // spawn function, so labelElements always stays index-aligned with
-    // them even though only one shape currently ever has a real label.
+    // them even though most shapes never have a real label.
     function spawnLabelFor(spec: ShapeSpec) {
       const label = createLabelElement(spec);
-      if (label) labelLayer.appendChild(label);
+      if (label) {
+        // spec.label is only ever the English default (see ./shapes) —
+        // a returning visitor whose saved preference is French should see
+        // the label in French from the very first frame, not just after
+        // they next toggle it themselves.
+        const key = spec.pageId ? pageLabelKeyFor(spec.pageId) : null;
+        if (key) {
+          const textEl = label.querySelector("text");
+          if (textEl) textEl.textContent = STRINGS[currentLang][key];
+        }
+        labelLayer.appendChild(label);
+      }
       labelElements.push(label);
     }
 
@@ -1034,120 +1058,6 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       updateGlowButtonVisual();
     }
 
-    // An envelope — opens the visitor's mail client via a plain mailto:
-    // href (see handlePointerDown), nothing sent automatically. Same
-    // stencil-family treatment as the switch/bulb/glow button.
-    function spawnContactEmail(spec: ShapeSpec, x: number, y: number, vx: number, vy: number) {
-      const body = createShapeBody(spec, x, y);
-      Body.setVelocity(body, { x: vx, y: vy });
-      Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.04);
-      bodies.push(body);
-      specs.push(spec);
-      glowElements.push(null); // no glow — it's UI chrome, not a toy
-      spawnLabelFor(spec); // null — this shape has no pageId/label
-      Composite.add(engine.world, body);
-
-      const hw = spec.size;
-      const hh = spec.size2 ?? spec.size;
-      const line = "var(--color-ink)";
-      const strokeWidth = Math.max(1.3, hw * 0.09);
-
-      const g = document.createElementNS(ns, "g") as SVGGElement;
-      g.style.transition = "filter 0.15s ease";
-
-      const bodyRect = document.createElementNS(ns, "rect");
-      bodyRect.setAttribute("x", String(-hw));
-      bodyRect.setAttribute("y", String(-hh));
-      bodyRect.setAttribute("width", String(hw * 2));
-      bodyRect.setAttribute("height", String(hh * 2));
-      bodyRect.setAttribute("rx", String(hw * 0.16));
-      bodyRect.setAttribute("fill", spec.color);
-      bodyRect.setAttribute("stroke", line);
-      bodyRect.setAttribute("stroke-width", String(strokeWidth));
-      g.appendChild(bodyRect);
-
-      // The flap: two lines from the top corners meeting near center —
-      // that's all it takes to read as an envelope.
-      const flap = document.createElementNS(ns, "path");
-      flap.setAttribute(
-        "d",
-        `M ${(-hw * 0.8).toFixed(2)} ${(-hh * 0.62).toFixed(2)} L 0 ${(hh * 0.12).toFixed(2)} L ${(hw * 0.8).toFixed(2)} ${(-hh * 0.62).toFixed(2)}`,
-      );
-      flap.setAttribute("fill", "none");
-      flap.setAttribute("stroke", line);
-      flap.setAttribute("stroke-width", String(strokeWidth * 0.85));
-      flap.setAttribute("stroke-linejoin", "round");
-      flap.setAttribute("stroke-linecap", "round");
-      g.appendChild(flap);
-
-      shapeLayer.appendChild(g);
-      elements.push(g);
-    }
-
-    // A generic `</>` code badge — opens a GitHub (or similar) profile in
-    // a new tab (see handlePointerDown). Deliberately not a redrawn
-    // GitHub logo — that's a registered mark — a plain brackets glyph
-    // says "see my code" just as clearly.
-    function spawnContactCode(spec: ShapeSpec, x: number, y: number, vx: number, vy: number) {
-      const body = createShapeBody(spec, x, y);
-      Body.setVelocity(body, { x: vx, y: vy });
-      Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.04);
-      bodies.push(body);
-      specs.push(spec);
-      glowElements.push(null);
-      spawnLabelFor(spec);
-      Composite.add(engine.world, body);
-
-      const r = spec.size;
-      const line = "var(--color-ink)";
-      const strokeWidth = Math.max(1.3, r * 0.09);
-
-      const g = document.createElementNS(ns, "g") as SVGGElement;
-      g.style.transition = "filter 0.15s ease";
-
-      const plate = document.createElementNS(ns, "rect");
-      plate.setAttribute("x", String(-r));
-      plate.setAttribute("y", String(-r));
-      plate.setAttribute("width", String(r * 2));
-      plate.setAttribute("height", String(r * 2));
-      plate.setAttribute("rx", String(r * 0.22));
-      plate.setAttribute("fill", spec.color);
-      plate.setAttribute("stroke", line);
-      plate.setAttribute("stroke-width", String(strokeWidth));
-      g.appendChild(plate);
-
-      const left = document.createElementNS(ns, "path");
-      left.setAttribute("d", `M ${(-r * 0.16).toFixed(2)} ${(-r * 0.34).toFixed(2)} L ${(-r * 0.42).toFixed(2)} 0 L ${(-r * 0.16).toFixed(2)} ${(r * 0.34).toFixed(2)}`);
-      left.setAttribute("fill", "none");
-      left.setAttribute("stroke", line);
-      left.setAttribute("stroke-width", String(strokeWidth * 0.9));
-      left.setAttribute("stroke-linecap", "round");
-      left.setAttribute("stroke-linejoin", "round");
-      g.appendChild(left);
-
-      const right = document.createElementNS(ns, "path");
-      right.setAttribute("d", `M ${(r * 0.16).toFixed(2)} ${(-r * 0.34).toFixed(2)} L ${(r * 0.42).toFixed(2)} 0 L ${(r * 0.16).toFixed(2)} ${(r * 0.34).toFixed(2)}`);
-      right.setAttribute("fill", "none");
-      right.setAttribute("stroke", line);
-      right.setAttribute("stroke-width", String(strokeWidth * 0.9));
-      right.setAttribute("stroke-linecap", "round");
-      right.setAttribute("stroke-linejoin", "round");
-      g.appendChild(right);
-
-      const slash = document.createElementNS(ns, "line");
-      slash.setAttribute("x1", String(r * 0.06));
-      slash.setAttribute("y1", String(r * 0.3));
-      slash.setAttribute("x2", String(-r * 0.06));
-      slash.setAttribute("y2", String(-r * 0.3));
-      slash.setAttribute("stroke", line);
-      slash.setAttribute("stroke-width", String(strokeWidth * 0.7));
-      slash.setAttribute("stroke-linecap", "round");
-      g.appendChild(slash);
-
-      shapeLayer.appendChild(g);
-      elements.push(g);
-    }
-
     // A little globe — toggles the site's language on click (see
     // toggleLanguage) and shows the *current* language as a short code
     // rendered right on the icon, the same way the switch/bulb show
@@ -1232,10 +1142,6 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
         spawnLightSwitch(spec, x, y, vx, vy);
       } else if (spec.kind === "glow-button") {
         spawnGlowButton(spec, x, y, vx, vy);
-      } else if (spec.kind === "contact-email") {
-        spawnContactEmail(spec, x, y, vx, vy);
-      } else if (spec.kind === "contact-code") {
-        spawnContactCode(spec, x, y, vx, vy);
       } else if (spec.kind === "language-toggle") {
         spawnLanguageToggle(spec, x, y, vx, vy);
       } else {
@@ -1316,12 +1222,13 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
           label.style.transitionDuration = `${LABEL_REVEAL_MS}ms`;
           label.style.opacity = "1";
 
-          // The one shape with a real page behind it opens itself, a beat
-          // after landing — see AUTO_EXPAND_DELAY_MS. This is the site
-          // demonstrating its own "click a shape, it opens a page" trick
-          // rather than waiting for a visitor to discover it — see the
-          // FloatingShapes intro comment.
-          if (specs[index].pageId && !autoExpandTimer) {
+          // Internships specifically opens itself once it lands — see
+          // AUTO_EXPAND_DELAY_MS. This is the site demonstrating its own
+          // "click a shape, it opens a page" trick rather than waiting for
+          // a visitor to discover it themselves — see the FloatingShapes
+          // intro comment. Contact is a real pageId shape too now, but
+          // doesn't get this same auto-open, just the regular click.
+          if (specs[index].pageId === "internships" && !autoExpandTimer) {
             autoExpandTimer = setTimeout(() => {
               autoExpandTimer = null;
               if (gravityEngaged && !panelState && !transitioning) beginExpand(index);
@@ -1628,12 +1535,6 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
         toggleGlow();
       } else if (hitSpec.kind === "language-toggle") {
         toggleLanguage();
-      } else if (hitSpec.kind === "contact-email" && hitSpec.href) {
-        // A plain mailto: link — opens the visitor's own mail client with
-        // the address pre-filled; nothing is sent automatically.
-        window.location.href = hitSpec.href;
-      } else if (hitSpec.kind === "contact-code" && hitSpec.href) {
-        window.open(hitSpec.href, "_blank", "noopener,noreferrer");
       }
     }
     document.addEventListener("pointerdown", handlePointerDown);

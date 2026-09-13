@@ -19,6 +19,11 @@ export interface Strings {
   soonSite: string;
   internshipsLabel: string;
   internshipsTitle: string;
+  contactLabel: string;
+  contactTitle: string;
+  contactIntro: string;
+  contactEmailLabel: string;
+  contactGithubLabel: string;
 }
 
 const en: Strings = {
@@ -29,6 +34,11 @@ const en: Strings = {
   soonSite: "Soon, these become the site",
   internshipsLabel: "Internships",
   internshipsTitle: "Internships",
+  contactLabel: "Contact",
+  contactTitle: "Get in Touch",
+  contactIntro: "Have a project, an opportunity, or just want to say hi? Reach out — I'd love to hear from you.",
+  contactEmailLabel: "Email",
+  contactGithubLabel: "GitHub",
 };
 
 const fr: Strings = {
@@ -39,6 +49,12 @@ const fr: Strings = {
   soonSite: "Bientôt, ceci deviendra le site",
   internshipsLabel: "Stages",
   internshipsTitle: "Stages",
+  contactLabel: "Contact",
+  contactTitle: "Me contacter",
+  contactIntro:
+    "Un projet, une opportunité, ou simplement envie de dire bonjour? Écrivez-moi — ça me ferait plaisir d'échanger.",
+  contactEmailLabel: "Courriel",
+  contactGithubLabel: "GitHub",
 };
 
 export const STRINGS: Record<Lang, Strings> = { en, fr };

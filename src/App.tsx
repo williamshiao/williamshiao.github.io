@@ -3,6 +3,7 @@ import { PlaygroundPlate } from "./components/layout/PlaygroundPlate";
 import { Footer } from "./components/layout/Footer";
 import { Hero } from "./components/sections/Hero";
 import { Internships } from "./components/sections/Internships";
+import { Contact } from "./components/sections/Contact";
 import { FloatingShapes } from "./components/physics/FloatingShapes";
 import { useLanguage } from "./context/LanguageContext";
 
@@ -73,6 +74,14 @@ function App() {
                 <h2 className="font-display text-2xl font-semibold text-ink sm:text-3xl">{t("internshipsTitle")}</h2>
                 <div className="mt-8">
                   <Internships />
+                </div>
+              </>
+            )}
+            {openPanel.pageId === "contact" && (
+              <>
+                <h2 className="font-display text-2xl font-semibold text-ink sm:text-3xl">{t("contactTitle")}</h2>
+                <div className="mt-8">
+                  <Contact />
                 </div>
               </>
             )}

@@ -13,7 +13,8 @@
  *
  * Any shape that gets a `pageId` (see ShapeSpec) must be forced to
  * `kind: "rect"` when it's created, and given a short `label` — see
- * generateShapes for where that happens for the current one.
+ * generateShapes for where that happens for the current two (Internships,
+ * Contact).
  *
  * Every size (both the random ranges and the fixed UI shapes' own sizes)
  * is scaled by generateShapes' viewport-derived `scale` — see
@@ -31,8 +32,6 @@ export type ShapeKind =
   | "ditto"
   | "switch"
   | "glow-button"
-  | "contact-email"
-  | "contact-code"
   | "language-toggle";
 
 export interface ShapeSpec {
@@ -45,7 +44,7 @@ export interface ShapeSpec {
   size2?: number;
   rotation?: number;
   interactive: boolean;
-  /** Set only on the one big shape that currently opens a real page (see
+  /** Set on each big shape that currently opens a real page (see
    * FloatingShapes' click-to-expand) — undefined means "just decorative
    * hover feedback for now", same as any other non-interactive shape.
    * Always paired with `kind: "rect"` (see generateShapes) — the expand
@@ -58,8 +57,8 @@ export interface ShapeSpec {
   label?: string;
   /** Which population this shape belongs to for spawn-speed purposes (see
    * FloatingShapes) — not derivable from `interactive` alone, since the
-   * switch/bulb/contact/language shapes are small-sized but still
-   * `interactive: true`. */
+   * switch/bulb/language shapes are small-sized but still `interactive:
+   * true`. */
   sizeTier: "small" | "big";
   /** True for any shape whose click does something real (open a page,
    * flip a setting, follow a link) — as opposed to `interactive`, which
@@ -67,9 +66,6 @@ export interface ShapeSpec {
    * shape whether or not it has a real destination yet. Drives the
    * pointer-cursor affordance in FloatingShapes (see isClickableSpec). */
   hasClickAction?: boolean;
-  /** Destination for the two contact shapes (see makeContactEmailShape/
-   * makeContactCodeShape) — a mailto: link or a profile URL. */
-  href?: string;
 }
 
 const KIND_WEIGHTS: { kind: ShapeKind; weight: number }[] = [
@@ -189,9 +185,9 @@ function clampCount(value: number, min: number, max: number): number {
 const BASE_DECORATIVE_SMALL = 3;
 const BASE_DECORATIVE_BIG = 4;
 
-/** Builds the full shape list for a given viewport: 6 fixed UI shapes
- * (ditto, switch, glow button, the two contact shapes, language) plus the
- * one pageId shape are always present regardless of size — those are
+/** Builds the full shape list for a given viewport: 4 fixed small UI shapes
+ * (switch, glow button, language) plus the two big pageId shapes
+ * (Internships, Contact) are always present regardless of size — those are
  * real features, not filler — but the purely decorative population, and
  * every shape's own size, scale with the viewport (see
  * computeShapeScale). */
@@ -199,25 +195,33 @@ export function generateShapes(viewportWidth: number, viewportHeight: number): S
   const scale = computeShapeScale(viewportWidth, viewportHeight);
   const decorativeSmallCount = clampCount(BASE_DECORATIVE_SMALL * scale, 1, 6);
   const decorativeBigCount = clampCount(BASE_DECORATIVE_BIG * scale, 2, 7);
-  // 5 fixed small shapes (switch/glow/email/code/language, filled in
-  // below) come first, then the decorative random ones.
-  const smallCount = 5 + decorativeSmallCount;
-  // 1 fixed pageId shape, then the decorative random ones.
-  const bigCount = 1 + decorativeBigCount;
+  // 3 fixed small shapes (switch/glow/language, filled in below) come
+  // first, then the decorative random ones.
+  const smallCount = 3 + decorativeSmallCount;
+  // 2 fixed pageId shapes, then the decorative random ones.
+  const bigCount = 2 + decorativeBigCount;
 
   const small = Array.from({ length: smallCount }, (_, i) => makeShape(`small-${i}`, false, "small", SMALL_SIZE, scale));
-  // The first big shape is always a rect, not randomly picked — it's the
-  // one that opens a real page (Internships, as a first pass — see
-  // FloatingShapes' click-to-expand), and forcing it to already be the
+  // The first two big shapes are always plain rects, not randomly picked —
+  // they're the ones that open a real page (Internships, Contact — see
+  // FloatingShapes' click-to-expand), and forcing them to already be the
   // same kind the expand animation turns everything into is what keeps
   // that transition seamless rather than snapping from round/triangular
   // to rectangular the instant it starts growing.
   const big = Array.from({ length: bigCount }, (_, i) =>
-    makeShape(`big-${i}`, true, "big", BIG_SIZE, scale, i === 0 ? "rect" : undefined),
+    makeShape(`big-${i}`, true, "big", BIG_SIZE, scale, i === 0 || i === 1 ? "rect" : undefined),
   );
   if (big.length > 0) {
     big[0].pageId = "internships";
     big[0].label = "Internships";
+  }
+  // Consolidates what used to be two separate shapes (an envelope opening
+  // a mailto: link, a code badge opening GitHub in a new tab) into one
+  // real page, the same click-to-expand way Internships works — see
+  // ../sections/Contact.tsx for what's actually inside.
+  if (big.length > 1) {
+    big[1].pageId = "contact";
+    big[1].label = "Contact";
   }
   // One guaranteed light switch, always in the first small slot — see
   // FloatingShapes' toggleNightMode. (Ditto is shelved for now — see
@@ -226,12 +230,8 @@ export function generateShapes(viewportWidth: number, viewportHeight: number): S
   if (small.length > 0) small[0] = makeLightSwitchShape(scale);
   // And a push-button that toggles the shape glow effect, in the second.
   if (small.length > 1) small[1] = makeGlowButtonShape(scale);
-  // Contact shapes — an envelope (email) and a code-brackets badge
-  // (GitHub/portfolio code) — in the third and fourth slots.
-  if (small.length > 2) small[2] = makeContactEmailShape(scale);
-  if (small.length > 3) small[3] = makeContactCodeShape(scale);
-  // And the language toggle, in the fifth.
-  if (small.length > 4) small[4] = makeLanguageToggleShape(scale);
+  // And the language toggle, in the third.
+  if (small.length > 2) small[2] = makeLanguageToggleShape(scale);
   return [...small, ...big];
 }
 
@@ -293,50 +293,6 @@ export function makeGlowButtonShape(scale: number): ShapeSpec {
     size: 24 * scale,
     interactive: true,
     hasClickAction: true,
-    sizeTier: "small",
-  };
-}
-
-// TODO(content): replace with your real email address.
-const CONTACT_EMAIL = "hello@williamshiao.dev";
-// TODO(content): replace with your real GitHub (or preferred code host) profile URL.
-const GITHUB_URL = "https://github.com/your-username";
-
-/**
- * An envelope — opens the visitor's mail client with your address already
- * filled in (see FloatingShapes' click handler: a plain `mailto:` href,
- * nothing sent automatically). Same "always present, fixed size, stencil
- * icon" treatment as the switch/bulb.
- */
-export function makeContactEmailShape(scale: number): ShapeSpec {
-  return {
-    id: "contact-email",
-    kind: "contact-email",
-    color: "var(--color-surface)",
-    size: 22 * scale,
-    size2: 26 * scale,
-    interactive: true,
-    hasClickAction: true,
-    href: `mailto:${CONTACT_EMAIL}`,
-    sizeTier: "small",
-  };
-}
-
-/**
- * A generic `</>` code badge — opens your GitHub profile in a new tab.
- * Deliberately not a redrawn GitHub logo (that's a registered mark); a
- * plain code-brackets glyph says "see my code" just as clearly without
- * reproducing anyone's trademark.
- */
-export function makeContactCodeShape(scale: number): ShapeSpec {
-  return {
-    id: "contact-code",
-    kind: "contact-code",
-    color: "var(--color-surface)",
-    size: 24 * scale,
-    interactive: true,
-    hasClickAction: true,
-    href: GITHUB_URL,
     sizeTier: "small",
   };
 }
