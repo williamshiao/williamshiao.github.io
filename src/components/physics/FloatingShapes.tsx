@@ -108,6 +108,15 @@ const PLATE_SELECTOR = "[data-plate-bounds]";
 // copy painted above the shapes (see the setup effect below), clipped every
 // frame to their current silhouettes.
 const KNOCKOUT_SELECTOR = "[data-shape-knockout]";
+// The knockout clip geometry (see createClipShapeElement/updateClipShapeElement)
+// is drawn slightly *smaller* than the shape's actual silhouette. Even
+// though its position/size math is exact, it's a CSS clip-path on a plain
+// HTML element referencing an external SVG resource, which Chrome doesn't
+// always repaint in perfect lockstep with the shape's own (differently
+// scheduled) attribute update — a moving/rotating shape can show the white
+// a frame behind, poking past its edge for an instant. Shrinking the clip
+// keeps that slack safely inside the shape instead.
+const KNOCKOUT_CLIP_SHRINK = 0.85;
 const WALL_THICKNESS = 100; // generous, so fast bodies can't tunnel through on one big step
 const CURSOR_RADIUS = 14;
 const CURSOR_MASS = 60; // heavy relative to the shapes — a paddle, not another puck
@@ -223,7 +232,7 @@ function createClipShapeElement(spec: ShapeSpec): SVGCircleElement | SVGPolygonE
   const ns = "http://www.w3.org/2000/svg";
   if (spec.kind === "circle" || spec.kind === "glow-button" || spec.kind === "language-toggle") {
     const el = document.createElementNS(ns, "circle");
-    el.setAttribute("r", String(spec.size));
+    el.setAttribute("r", String(spec.size * KNOCKOUT_CLIP_SHRINK));
     return el;
   }
   return document.createElementNS(ns, "polygon");
@@ -253,14 +262,17 @@ function updateClipShapeElement(
   const sin = Math.sin(angle);
   const rotate = (dx: number, dy: number) => `${(x + dx * cos - dy * sin).toFixed(1)},${(y + dx * sin + dy * cos).toFixed(1)}`;
   if (spec.kind === "triangle") {
-    el.setAttribute("points", regularPolygonVertices(3, spec.size).map((p) => rotate(p.x, p.y)).join(" "));
+    el.setAttribute(
+      "points",
+      regularPolygonVertices(3, spec.size * KNOCKOUT_CLIP_SHRINK).map((p) => rotate(p.x, p.y)).join(" "),
+    );
     return;
   }
   // rect/switch/contact-email/contact-code/ditto — all rectangular
   // colliders (see createShapeBody). Sharp corners rather than chamfered;
   // a small approximation that doesn't matter at this scale.
-  const hw = spec.size;
-  const hh = spec.size2 ?? spec.size;
+  const hw = spec.size * KNOCKOUT_CLIP_SHRINK;
+  const hh = (spec.size2 ?? spec.size) * KNOCKOUT_CLIP_SHRINK;
   const corners: [number, number][] = [
     [-hw, -hh],
     [hw, -hh],
