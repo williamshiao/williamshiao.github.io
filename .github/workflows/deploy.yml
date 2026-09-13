@@ -1,0 +1,48 @@
+name: Deploy to GitHub Pages
+
+# Every push to master rebuilds the site and redeploys it automatically —
+# no manual build/upload step needed. workflow_dispatch just lets us
+# re-run a deploy by hand from the Actions tab without a new commit.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# Required for the official actions/deploy-pages step to publish on our
+# behalf via a short-lived OIDC token, rather than a stored credential.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one deploy should ever be in flight — if a second push lands while
+# one is still running, cancel the older one rather than racing it.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
