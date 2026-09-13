@@ -199,9 +199,9 @@ export function generateShapes(viewportWidth: number, viewportHeight: number): S
   const scale = computeShapeScale(viewportWidth, viewportHeight);
   const decorativeSmallCount = clampCount(BASE_DECORATIVE_SMALL * scale, 1, 6);
   const decorativeBigCount = clampCount(BASE_DECORATIVE_BIG * scale, 2, 7);
-  // 6 fixed small shapes (ditto/switch/glow/email/code/language, filled
-  // in below) come first, then the decorative random ones.
-  const smallCount = 6 + decorativeSmallCount;
+  // 5 fixed small shapes (switch/glow/email/code/language, filled in
+  // below) come first, then the decorative random ones.
+  const smallCount = 5 + decorativeSmallCount;
   // 1 fixed pageId shape, then the decorative random ones.
   const bigCount = 1 + decorativeBigCount;
 
@@ -219,20 +219,19 @@ export function generateShapes(viewportWidth: number, viewportHeight: number): S
     big[0].pageId = "internships";
     big[0].label = "Internships";
   }
-  // One guaranteed Ditto among the small tier, just for fun — always
-  // present (not a random chance kind), always in the first small slot.
-  if (small.length > 0) small[0] = makeDittoShape(scale);
-  // One guaranteed light switch too, in the second slot — see
-  // FloatingShapes' toggleNightMode.
-  if (small.length > 1) small[1] = makeLightSwitchShape(scale);
-  // And a push-button that toggles the shape glow effect, in the third.
-  if (small.length > 2) small[2] = makeGlowButtonShape(scale);
+  // One guaranteed light switch, always in the first small slot — see
+  // FloatingShapes' toggleNightMode. (Ditto is shelved for now — see
+  // makeDittoShape/dittoBlob.ts, kept but unused so it's easy to bring
+  // back later.)
+  if (small.length > 0) small[0] = makeLightSwitchShape(scale);
+  // And a push-button that toggles the shape glow effect, in the second.
+  if (small.length > 1) small[1] = makeGlowButtonShape(scale);
   // Contact shapes — an envelope (email) and a code-brackets badge
-  // (GitHub/portfolio code) — in the fourth and fifth slots.
-  if (small.length > 3) small[3] = makeContactEmailShape(scale);
-  if (small.length > 4) small[4] = makeContactCodeShape(scale);
-  // And the language toggle, in the sixth.
-  if (small.length > 5) small[5] = makeLanguageToggleShape(scale);
+  // (GitHub/portfolio code) — in the third and fourth slots.
+  if (small.length > 2) small[2] = makeContactEmailShape(scale);
+  if (small.length > 3) small[3] = makeContactCodeShape(scale);
+  // And the language toggle, in the fifth.
+  if (small.length > 4) small[4] = makeLanguageToggleShape(scale);
   return [...small, ...big];
 }
 

@@ -7,15 +7,15 @@ import { useLanguage } from "../../context/LanguageContext";
 export function Hero() {
   const { t } = useLanguage();
   return (
-    <div className="absolute inset-4 z-10 flex flex-col items-center justify-center overflow-hidden px-6 text-center sm:inset-10">
+    <div className="absolute inset-4 z-30 flex flex-col items-center justify-center overflow-hidden px-6 text-center sm:inset-10">
       {/* Soft color-glow accents — the only decoration on an otherwise plain-type hero. */}
       <div
         aria-hidden
-        className="pointer-events-none absolute h-[32rem] w-[32rem] rounded-full bg-pastel-pink/50 blur-3xl"
+        className="pointer-events-none absolute h-[32rem] w-[32rem] rounded-full bg-pastel-pink/25 blur-3xl"
       />
       <div
         aria-hidden
-        className="pointer-events-none absolute h-72 w-72 -translate-x-40 translate-y-24 rounded-full bg-pastel-blue/40 blur-3xl"
+        className="pointer-events-none absolute h-72 w-72 -translate-x-40 translate-y-24 rounded-full bg-pastel-blue/20 blur-3xl"
       />
 
       {/* flex + items-center centers each line by its own box, independent of
@@ -23,15 +23,21 @@ export function Hero() {
           previously flowed like inline content (side-by-side when they fit),
           which is what threw the centering off. */}
       <div className="relative flex w-full flex-col items-center">
+        {/* text-white + mix-blend-difference: against the plain background
+            this inverts to a normal dark readable color, but wherever a
+            physics shape passes underneath, the blend flips to that
+            shape's own inverse color — the "knockout" effect from the
+            hand-drawn mockup. Needs to paint above FloatingShapes' SVG
+            (z-20), hence this whole section sitting at z-30. */}
         <p
           data-blob-target="text"
-          className="font-pixel text-xs uppercase tracking-widest text-ditto sm:text-sm"
+          className="mix-blend-difference font-pixel text-xs uppercase tracking-widest text-white sm:text-sm"
         >
           {t("heroTagline")}
         </p>
         <h1
           data-blob-target="text"
-          className="mt-6 text-balance text-center font-display text-7xl font-semibold tracking-tight text-ink sm:text-8xl lg:text-9xl"
+          className="mix-blend-difference mt-6 text-balance text-center font-display text-7xl font-semibold tracking-tight text-white sm:text-8xl lg:text-9xl"
         >
           William Shiao
         </h1>
