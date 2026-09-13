@@ -46,6 +46,12 @@ import { createDittoNodes, stepDittoBlob, appendDittoFace, type DittoBlobState }
  * back to its original shape/size, dropping it back into normal gravity
  * like anything else.
  *
+ * A second special shape — a small rocker-switch rectangle (see
+ * makeLightSwitchShape) — toggles the site's night mode on click: flips
+ * a `data-theme="dark"` attribute on <html>, which every color token in
+ * index.css redefines, so it repaints the whole site without any
+ * component needing to know night mode exists.
+ *
  * Matter.js (MIT) rather than custom code: rigid-body elastic collision
  * among several bodies is its home turf. Position/size/color are generated
  * fresh every load (see ./shapes) rather than fixed.
@@ -135,6 +141,13 @@ function createShapeBody(spec: ShapeSpec, x: number, y: number): Matter.Body {
   };
   if (spec.kind === "circle" || spec.kind === "ditto") {
     return Bodies.circle(x, y, spec.size, common);
+  }
+  if (spec.kind === "switch") {
+    // Infinite inertia: collisions can still push it around and it still
+    // falls/bounces normally, but nothing can ever torque it into a spin
+    // — it needs to stay upright for "toggle up = light, down = dark" to
+    // keep reading correctly.
+    return Bodies.rectangle(x, y, spec.size * 2, (spec.size2 ?? spec.size) * 2, { ...common, inertia: Infinity });
   }
   if (spec.kind === "rect") {
     return Bodies.rectangle(x, y, spec.size * 2, (spec.size2 ?? spec.size) * 2, {
@@ -307,6 +320,38 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
     let dittoBlob: DittoBlobState | null = null;
     let dittoIndex = -1;
 
+    // Night mode: the single source of truth is the <html> attribute
+    // itself (index.html's inline script already applies a saved
+    // preference before first paint), so the switch's initial visual just
+    // reads that back rather than tracking its own separate boolean that
+    // could drift out of sync with it.
+    let nightMode = document.documentElement.dataset.theme === "dark";
+    let lightSwitch: { toggleEl: SVGRectElement; halfHeight: number; toggleHeight: number } | null = null;
+
+    function updateSwitchVisual() {
+      if (!lightSwitch) return;
+      const { toggleEl, halfHeight, toggleHeight } = lightSwitch;
+      const margin = (halfHeight * 2 - toggleHeight) * 0.18;
+      toggleEl.setAttribute("y", String(nightMode ? halfHeight - toggleHeight - margin : -halfHeight + margin));
+      toggleEl.setAttribute("fill", nightMode ? "#4c4a63" : "#fbbf24");
+    }
+
+    function toggleNightMode() {
+      nightMode = !nightMode;
+      if (nightMode) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      } else {
+        document.documentElement.removeAttribute("data-theme");
+      }
+      try {
+        localStorage.setItem("ditto-night-mode", String(nightMode));
+      } catch {
+        // Private browsing/storage disabled — the toggle still works for
+        // this visit, it just won't be remembered next time.
+      }
+      updateSwitchVisual();
+    }
+
     // Adds one shape to every parallel array/the world/the SVG at once —
     // used for the initial spawn below (index i's specs/bodies/elements
     // always refer to the same shape, which the click-to-expand code
@@ -348,6 +393,53 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       dittoBlob = { nodes: createDittoNodes(x, y, spec.size), radius: spec.size, pathEl, faceEl };
     }
 
+    // A rocker switch inside a rounded plate — plate color is the spec's
+    // own CSS-var color (see makeLightSwitchShape) so it always matches
+    // the site's current surface tone; the toggle nub's position/color
+    // are set by updateSwitchVisual, driven by the live nightMode value.
+    function spawnLightSwitch(spec: ShapeSpec, x: number, y: number, vx: number, vy: number) {
+      const body = createShapeBody(spec, x, y);
+      Body.setVelocity(body, { x: vx, y: vy });
+      // No angular velocity — see createShapeBody's infinite-inertia note,
+      // it should never leave its spawn angle.
+      bodies.push(body);
+      specs.push(spec);
+      Composite.add(engine.world, body);
+
+      const halfWidth = spec.size;
+      const halfHeight = spec.size2 ?? spec.size;
+
+      const g = document.createElementNS(ns, "g") as SVGGElement;
+      g.style.transition = "filter 0.15s ease";
+
+      const plate = document.createElementNS(ns, "rect");
+      plate.setAttribute("x", String(-halfWidth));
+      plate.setAttribute("y", String(-halfHeight));
+      plate.setAttribute("width", String(halfWidth * 2));
+      plate.setAttribute("height", String(halfHeight * 2));
+      plate.setAttribute("rx", String(halfWidth * 0.3));
+      plate.setAttribute("fill", spec.color);
+      plate.setAttribute("stroke", "#241f2e");
+      plate.setAttribute("stroke-opacity", "0.15");
+      plate.setAttribute("stroke-width", "2");
+      g.appendChild(plate);
+
+      const toggleHeight = halfHeight * 0.62;
+      const toggleEl = document.createElementNS(ns, "rect") as SVGRectElement;
+      toggleEl.setAttribute("x", String(-halfWidth * 0.72));
+      toggleEl.setAttribute("width", String(halfWidth * 1.44));
+      toggleEl.setAttribute("height", String(toggleHeight));
+      toggleEl.setAttribute("rx", String(toggleHeight * 0.35));
+      toggleEl.style.transition = "y 0.2s ease, fill 0.2s ease";
+      g.appendChild(toggleEl);
+
+      shapeLayer.appendChild(g);
+      elements.push(g);
+
+      lightSwitch = { toggleEl, halfHeight, toggleHeight };
+      updateSwitchVisual();
+    }
+
     shapes.forEach((spec, i) => {
       const cx = plateRect ? plateRect.left + plateRect.width / 2 : window.innerWidth / 2;
       const cy = plateRect ? plateRect.top + window.innerHeight / 2 : window.innerHeight / 2;
@@ -361,6 +453,8 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       const vy = Math.sin(dir) * SPAWN_SPEED;
       if (spec.kind === "ditto") {
         spawnDittoBlob(spec, x, y, vx, vy);
+      } else if (spec.kind === "switch") {
+        spawnLightSwitch(spec, x, y, vx, vy);
       } else {
         spawnShape(spec, x, y, vx, vy);
       }
@@ -434,12 +528,17 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
     // them. They bounce off the top wall and each other from there, same
     // as freshly spawned ones.
     function launchShapesUpward() {
-      for (const body of bodies) {
+      bodies.forEach((body, i) => {
         const speed = LAUNCH_SPEED_MIN + Math.random() * (LAUNCH_SPEED_MAX - LAUNCH_SPEED_MIN);
         const sideways = (Math.random() - 0.5) * 8;
         Body.setVelocity(body, { x: sideways, y: -speed });
-        Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.12);
-      }
+        // The switch needs to stay upright (see createShapeBody) — an
+        // explicit setAngularVelocity would spin it anyway, since infinite
+        // inertia only blocks *collision*-induced torque, not this.
+        if (specs[i].kind !== "switch") {
+          Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.12);
+        }
+      });
     }
 
     // Click-to-expand: the one shape tagged with a pageId (see ./shapes)
@@ -608,8 +707,11 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       const docY = e.clientY + window.scrollY;
       const hits = Query.point(bodies, { x: docX, y: docY });
       const hitIndex = hits.length > 0 ? bodies.indexOf(hits[0]) : -1;
-      if (hitIndex >= 0 && specs[hitIndex].pageId) {
+      if (hitIndex < 0) return;
+      if (specs[hitIndex].pageId) {
         beginExpand(hitIndex);
+      } else if (specs[hitIndex].kind === "switch") {
+        toggleNightMode();
       }
     }
     document.addEventListener("pointerdown", handlePointerDown);

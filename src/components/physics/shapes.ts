@@ -12,7 +12,7 @@
  * file again.
  */
 
-export type ShapeKind = "circle" | "rect" | "triangle" | "ditto";
+export type ShapeKind = "circle" | "rect" | "triangle" | "ditto" | "switch";
 
 export interface ShapeSpec {
   id: string;
@@ -106,20 +106,34 @@ export function generateShapes(smallCount: number, bigCount: number): ShapeSpec[
   // One guaranteed Ditto among the small tier, just for fun — always
   // present (not a random chance kind), always in the first small slot.
   if (small.length > 0) small[0] = makeDittoShape();
+  // One guaranteed light switch too, in the second slot — see
+  // FloatingShapes' toggleNightMode.
+  if (small.length > 1) small[1] = makeLightSwitchShape();
   return [...small, ...big];
 }
 
 /**
  * A little easter egg: one of the small shapes is always Ditto itself,
- * rendered in FloatingShapes as a simple round blob with the character's
- * classic asymmetric face (one oval eye, one flat line eye, a wavy
- * mouth). Physically it's treated as a plain circle — no soft-body
- * mesh/morphing this time, that whole approach was banked earlier for
- * being too unstable, and it's not needed for something this small.
+ * rendered in FloatingShapes as a soft-body blob (see ./dittoBlob) with
+ * the character's classic asymmetric face — one oval eye, one flat line
+ * eye, a wavy mouth.
  */
 export function makeDittoShape(): ShapeSpec {
   const [min, max] = SMALL_SIZE.circle;
   // A touch bigger than a typical small shape so it actually reads as
   // "someone drew a face on this" rather than disappearing into the mix.
   return { id: "ditto", kind: "ditto", color: "#f0abfc", size: randomBetween(min, max) * 1.15, interactive: false };
+}
+
+/**
+ * Another shape that's always present rather than randomly generated: a
+ * small rocker-switch-shaped rectangle that toggles the whole site's
+ * night mode when clicked (see FloatingShapes' toggleNightMode/
+ * spawnLightSwitch). Fixed size/proportions (not randomized like the
+ * decorative tier) since it needs to reliably read as "a switch", and
+ * `color` is a CSS var rather than a literal color so its plate always
+ * matches the site's *current* surface tone, light or dark.
+ */
+export function makeLightSwitchShape(): ShapeSpec {
+  return { id: "light-switch", kind: "switch", color: "var(--color-surface)", size: 22, size2: 32, interactive: true };
 }

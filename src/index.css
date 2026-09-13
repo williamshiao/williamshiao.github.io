@@ -24,6 +24,23 @@
   --font-pixel: "Press Start 2P", "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
 }
 
+/* Night mode — toggled by clicking the light-switch shape (see
+   FloatingShapes' toggleNightMode). Higher specificity than the bare
+   `:root` above so it always wins regardless of source order, and it
+   redefines the same token names rather than introducing new ones, so
+   every component that already reads --color-ink/--color-surface/etc.
+   via a Tailwind utility repaints automatically — nothing else needs to
+   know night mode exists. Deliberately leaves the pastel/ditto accent
+   tokens alone: they're saturated enough to still read as soft glows
+   against a dark canvas. */
+:root[data-theme="dark"] {
+  --color-canvas: #16131f;
+  --color-surface: #211d2c;
+  --color-ink: #f4f0f9;
+  --color-ink-soft: #b4abc4;
+  --color-line: #362f45;
+}
+
 @layer base {
   body {
     background-color: var(--color-canvas);
