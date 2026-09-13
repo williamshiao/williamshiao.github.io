@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import Matter from "matter-js";
 import { generateShapes, type ShapeSpec } from "./shapes";
+import { createDittoNodes, stepDittoBlob, appendDittoFace, type DittoBlobState } from "./dittoBlob";
 
 /**
  * A physics playground spanning one continuous, seamless plate (see
@@ -154,46 +155,8 @@ function createShapeElement(spec: ShapeSpec): SVGGraphicsElement {
     el.setAttribute("fill", spec.color);
     return el;
   }
-  if (spec.kind === "ditto") {
-    // A round blob with Ditto's classic asymmetric face — one oval eye,
-    // one flat line eye, a simple wavy mouth. Spins with the body just
-    // like any other shape, which only makes it more fun to watch.
-    const r = spec.size;
-    const g = document.createElementNS(ns, "g");
-
-    const body = document.createElementNS(ns, "circle");
-    body.setAttribute("r", String(r));
-    body.setAttribute("fill", spec.color);
-    g.appendChild(body);
-
-    const leftEye = document.createElementNS(ns, "ellipse");
-    leftEye.setAttribute("cx", String(-r * 0.32));
-    leftEye.setAttribute("cy", String(-r * 0.15));
-    leftEye.setAttribute("rx", String(r * 0.12));
-    leftEye.setAttribute("ry", String(r * 0.16));
-    leftEye.setAttribute("fill", "#241f2e");
-    g.appendChild(leftEye);
-
-    const rightEye = document.createElementNS(ns, "line");
-    rightEye.setAttribute("x1", String(r * 0.16));
-    rightEye.setAttribute("y1", String(-r * 0.15));
-    rightEye.setAttribute("x2", String(r * 0.46));
-    rightEye.setAttribute("y2", String(-r * 0.15));
-    rightEye.setAttribute("stroke", "#241f2e");
-    rightEye.setAttribute("stroke-width", String(r * 0.09));
-    rightEye.setAttribute("stroke-linecap", "round");
-    g.appendChild(rightEye);
-
-    const mouth = document.createElementNS(ns, "path");
-    mouth.setAttribute("d", `M ${-r * 0.28} ${r * 0.32} Q 0 ${r * 0.5} ${r * 0.28} ${r * 0.32}`);
-    mouth.setAttribute("fill", "none");
-    mouth.setAttribute("stroke", "#241f2e");
-    mouth.setAttribute("stroke-width", String(r * 0.08));
-    mouth.setAttribute("stroke-linecap", "round");
-    g.appendChild(mouth);
-
-    return g;
-  }
+  // Note: "ditto" doesn't go through this function — it gets its own
+  // soft-body path + face group (see spawnDittoBlob below).
   if (spec.kind === "rect") {
     const el = document.createElementNS(ns, "rect");
     const w = spec.size * 2;
@@ -336,6 +299,14 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
     const elements: SVGGElement[] = [];
     const specs: ShapeSpec[] = [];
 
+    // Ditto gets a real rigid circle body too (see createShapeBody) so it
+    // collides with everything normally, but its *visual* is a soft-body
+    // skin driven by that body instead of a plain circle — see
+    // dittoBlob.ts. dittoIndex is which slot in bodies/elements/specs it
+    // lives in, so the render loop below can special-case just that one.
+    let dittoBlob: DittoBlobState | null = null;
+    let dittoIndex = -1;
+
     // Adds one shape to every parallel array/the world/the SVG at once —
     // used for the initial spawn below (index i's specs/bodies/elements
     // always refer to the same shape, which the click-to-expand code
@@ -355,6 +326,28 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       elements.push(g);
     }
 
+    function spawnDittoBlob(spec: ShapeSpec, x: number, y: number, vx: number, vy: number) {
+      const body = createShapeBody(spec, x, y);
+      Body.setVelocity(body, { x: vx, y: vy });
+      Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.04);
+      bodies.push(body);
+      specs.push(spec);
+      Composite.add(engine.world, body);
+
+      const g = document.createElementNS(ns, "g") as SVGGElement;
+      const pathEl = document.createElementNS(ns, "path") as SVGPathElement;
+      pathEl.setAttribute("fill", spec.color);
+      g.appendChild(pathEl);
+      const faceEl = document.createElementNS(ns, "g") as SVGGElement;
+      appendDittoFace(faceEl, spec.size);
+      g.appendChild(faceEl);
+      shapeLayer.appendChild(g);
+      elements.push(g);
+
+      dittoIndex = bodies.length - 1;
+      dittoBlob = { nodes: createDittoNodes(x, y, spec.size), radius: spec.size, pathEl, faceEl };
+    }
+
     shapes.forEach((spec, i) => {
       const cx = plateRect ? plateRect.left + plateRect.width / 2 : window.innerWidth / 2;
       const cy = plateRect ? plateRect.top + window.innerHeight / 2 : window.innerHeight / 2;
@@ -364,7 +357,13 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       const x = cx + Math.cos(angle) * spreadX * (0.5 + 0.5 * Math.random());
       const y = cy + Math.sin(angle) * spreadY * (0.5 + 0.5 * Math.random());
       const dir = Math.random() * Math.PI * 2;
-      spawnShape(spec, x, y, Math.cos(dir) * SPAWN_SPEED, Math.sin(dir) * SPAWN_SPEED);
+      const vx = Math.cos(dir) * SPAWN_SPEED;
+      const vy = Math.sin(dir) * SPAWN_SPEED;
+      if (spec.kind === "ditto") {
+        spawnDittoBlob(spec, x, y, vx, vy);
+      } else {
+        spawnShape(spec, x, y, vx, vy);
+      }
     });
 
     // The cursor is a real physics body — heavy relative to the shapes, and
@@ -723,6 +722,13 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
 
       for (let i = 0; i < bodies.length; i++) {
         const b = bodies[i];
+        if (dittoBlob && i === dittoIndex) {
+          // The blob's path/face are drawn in absolute coordinates and
+          // updated directly (see stepDittoBlob) — no <g> transform here,
+          // that would double up with the translate it already bakes in.
+          stepDittoBlob(dittoBlob, b.position.x, b.position.y, b.angle);
+          continue;
+        }
         elements[i].setAttribute("transform", `translate(${b.position.x.toFixed(2)} ${b.position.y.toFixed(2)}) rotate(${(b.angle * (180 / Math.PI)).toFixed(2)})`);
       }
 
