@@ -1,34 +1,48 @@
 import { useEffect, useRef } from "react";
 import Matter from "matter-js";
-import { SHAPES, type ShapeSpec } from "./shapes";
+import { generateShapes, type ShapeSpec } from "./shapes";
 
 /**
- * A zero-gravity, frictionless physics playground: a handful of solid-
- * colored shapes drift inside the terrarium, bouncing elastically off its
- * walls and off each other, and the cursor itself is a physical (invisible)
- * body that knocks them around on contact — an air-hockey table, not a
- * character. This replaces the earlier Ditto cursor concept for now (that
- * soft-body mesh code is banked, not deleted — recoverable from git log —
- * since it solved a different problem: one deformable body, not many rigid
- * ones bouncing off each other).
+ * A physics playground spanning two scroll-snapped sections: the top
+ * "terrarium" (zero gravity, zero friction — shapes drift forever, bouncing
+ * elastically off its walls, off each other, and off the cursor, which is
+ * itself an invisible physical body) and a "floor" section below it. Once
+ * the floor scrolls into view, gravity switches on for good: the floor wall
+ * that was containing shapes in the terrarium relocates to the bottom of
+ * the floor section, and everything still airborne falls through into it,
+ * settles (restitution/friction both increase at that point, so they
+ * actually come to rest instead of bouncing forever), and becomes
+ * hoverable — this is the first step toward these becoming the site's page
+ * navigation, so hovering one darkens it as a stand-in for "interactive."
  *
- * Matter.js (MIT, no license concern) rather than custom code this time:
- * rigid-body elastic collision among several bodies is exactly its home
- * turf, and after the debugging spent getting a custom soft-body mesh
- * stable, reaching for a mature, widely-used engine for a *different* kind
- * of physics problem was the more sensible call.
+ * Matter.js (MIT) rather than custom code: rigid-body elastic collision
+ * among several bodies is its home turf. Position/size/color are generated
+ * fresh every load (see ./shapes) rather than fixed.
  */
 
-const { Engine, Bodies, Body, Composite } = Matter;
+const { Engine, Bodies, Body, Composite, Query } = Matter;
 
+const SHAPE_COUNT = 8;
 const WALL_THICKNESS = 100; // generous, so fast bodies can't tunnel through on one big step
 const CURSOR_RADIUS = 14;
 const CURSOR_MASS = 60; // heavy relative to the shapes — a paddle, not another puck
 const SPAWN_SPEED = 2.2; // px/frame, initial drift speed
 
-function getTerrariumRect(): DOMRect | null {
-  const el = document.querySelector("[data-terrarium-bounds]");
-  return el ? el.getBoundingClientRect() : null;
+const GRAVITY_Y = 1;
+// Shapes are perfectly elastic/frictionless while floating (SETTLE_* below
+// is applied only once gravity engages) so they'd otherwise bounce on the
+// floor forever — these make them actually come to rest.
+const SETTLE_RESTITUTION = 0.4;
+const SETTLE_FRICTION = 0.06;
+const SETTLE_FRICTION_AIR = 0.02;
+
+const HOVER_FILTER = "brightness(0.72)";
+
+function getDocRect(selector: string): DOMRect | null {
+  const el = document.querySelector(selector);
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return new DOMRect(r.left + window.scrollX, r.top + window.scrollY, r.width, r.height);
 }
 
 function regularPolygonVertices(sides: number, radius: number, rotationOffset = -Math.PI / 2) {
@@ -99,30 +113,41 @@ export function FloatingShapes() {
     if (!svg) return;
 
     const setViewport = () => {
-      svg.setAttribute("viewBox", `0 0 ${window.innerWidth} ${window.innerHeight}`);
+      const height = Math.max(document.documentElement.scrollHeight, window.innerHeight);
+      svg.setAttribute("width", String(window.innerWidth));
+      svg.setAttribute("height", String(height));
+      svg.setAttribute("viewBox", `0 0 ${window.innerWidth} ${height}`);
+      svg.style.height = `${height}px`;
     };
     setViewport();
 
     const engine = Engine.create({ gravity: { x: 0, y: 0 } });
+    let gravityEngaged = false;
 
-    // Walls: rebuilt to match the terrarium's bounds whenever it resizes.
+    // Walls: top + left + right always bound the terrarium section; the
+    // "floor" wall sits at the terrarium's bottom until gravity engages,
+    // then relocates to the floor section's bottom, opening the terrarium
+    // up so anything still airborne falls through into it.
     let wallBodies: Matter.Body[] = [];
     function rebuildWalls() {
       Composite.remove(engine.world, wallBodies);
-      const rect = getTerrariumRect();
-      if (!rect) {
+      const terrarium = getDocRect("[data-terrarium-bounds]");
+      const floor = getDocRect("[data-floor-bounds]");
+      if (!terrarium) {
         wallBodies = [];
         return;
       }
       const t = WALL_THICKNESS;
-      const cx = rect.left + rect.width / 2;
-      const cy = rect.top + rect.height / 2;
+      const bottom = gravityEngaged && floor ? floor.bottom : terrarium.bottom;
+      const spanTop = terrarium.top;
+      const spanHeight = bottom - spanTop;
+      const cx = terrarium.left + terrarium.width / 2;
       const wallOpts = { isStatic: true, restitution: 1, friction: 0 };
       wallBodies = [
-        Bodies.rectangle(cx, rect.top - t / 2, rect.width + t * 2, t, wallOpts), // top
-        Bodies.rectangle(cx, rect.bottom + t / 2, rect.width + t * 2, t, wallOpts), // bottom
-        Bodies.rectangle(rect.left - t / 2, cy, t, rect.height + t * 2, wallOpts), // left
-        Bodies.rectangle(rect.right + t / 2, cy, t, rect.height + t * 2, wallOpts), // right
+        Bodies.rectangle(cx, spanTop - t / 2, terrarium.width + t * 2, t, wallOpts), // top
+        Bodies.rectangle(cx, bottom + t / 2, terrarium.width + t * 2, t, wallOpts), // floor
+        Bodies.rectangle(terrarium.left - t / 2, spanTop + spanHeight / 2, t, spanHeight + t * 2, wallOpts), // left
+        Bodies.rectangle(terrarium.right + t / 2, spanTop + spanHeight / 2, t, spanHeight + t * 2, wallOpts), // right
       ];
       Composite.add(engine.world, wallBodies);
     }
@@ -137,19 +162,20 @@ export function FloatingShapes() {
     // Shape bodies, spread out inside the terrarium with a small random walk
     // of initial velocity — Matter's own solver untangles any initial
     // overlap over the first few frames.
-    const rect = getTerrariumRect();
+    const terrariumRect = getDocRect("[data-terrarium-bounds]");
+    const shapes = generateShapes(SHAPE_COUNT);
     const ns = "http://www.w3.org/2000/svg";
     const shapeLayer = document.createElementNS(ns, "g");
     svg.appendChild(shapeLayer);
 
     const bodies: Matter.Body[] = [];
     const elements: SVGGElement[] = [];
-    SHAPES.forEach((spec, i) => {
-      const cx = rect ? rect.left + rect.width / 2 : window.innerWidth / 2;
-      const cy = rect ? rect.top + rect.height / 2 : window.innerHeight / 2;
-      const spreadX = rect ? rect.width * 0.3 : 200;
-      const spreadY = rect ? rect.height * 0.3 : 200;
-      const angle = (i / SHAPES.length) * Math.PI * 2;
+    shapes.forEach((spec, i) => {
+      const cx = terrariumRect ? terrariumRect.left + terrariumRect.width / 2 : window.innerWidth / 2;
+      const cy = terrariumRect ? terrariumRect.top + terrariumRect.height / 2 : window.innerHeight / 2;
+      const spreadX = terrariumRect ? terrariumRect.width * 0.3 : 200;
+      const spreadY = terrariumRect ? terrariumRect.height * 0.3 : 200;
+      const angle = (i / shapes.length) * Math.PI * 2;
       const x = cx + Math.cos(angle) * spreadX * (0.5 + 0.5 * Math.random());
       const y = cy + Math.sin(angle) * spreadY * (0.5 + 0.5 * Math.random());
 
@@ -160,16 +186,46 @@ export function FloatingShapes() {
       bodies.push(body);
 
       const g = document.createElementNS(ns, "g") as SVGGElement;
+      g.style.transition = "filter 0.15s ease";
       g.appendChild(createShapeElement(spec));
       shapeLayer.appendChild(g);
       elements.push(g);
     });
     Composite.add(engine.world, bodies);
 
+    // Gravity engages once, permanently, when the floor section scrolls
+    // into view — this is a one-way narrative moment, not a toggle.
+    let hoveredIndex = -1;
+    function engageGravity() {
+      if (gravityEngaged) return;
+      gravityEngaged = true;
+      engine.gravity.y = GRAVITY_Y;
+      for (const body of bodies) {
+        Body.set(body, {
+          restitution: SETTLE_RESTITUTION,
+          friction: SETTLE_FRICTION,
+          frictionAir: SETTLE_FRICTION_AIR,
+        });
+      }
+      rebuildWalls();
+    }
+    const floorEl = document.querySelector("[data-floor-bounds]");
+    let observer: IntersectionObserver | null = null;
+    if (floorEl) {
+      observer = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((entry) => entry.isIntersecting)) engageGravity();
+        },
+        { threshold: 0.3 },
+      );
+      observer.observe(floorEl);
+    }
+
     // The cursor is a real physics body — heavy relative to the shapes, and
-    // manually driven to the mouse position every frame (rather than left
-    // to the engine's own integration) so it always tracks exactly, while
-    // still handing off realistic velocity to whatever it hits.
+    // manually driven to the mouse's *document* position every frame
+    // (rather than left to the engine's own integration) so it always
+    // tracks exactly, while still handing off realistic velocity to
+    // whatever it hits.
     const cursorBody = Bodies.circle(-9999, -9999, CURSOR_RADIUS, {
       restitution: 1,
       friction: 0,
@@ -179,21 +235,21 @@ export function FloatingShapes() {
     });
     Composite.add(engine.world, cursorBody);
 
-    let mouseX = -9999;
-    let mouseY = -9999;
+    let lastClientX = -9999;
+    let lastClientY = -9999;
     let hasMouse = false;
-    let lastCommandedX = mouseX;
-    let lastCommandedY = mouseY;
+    let lastCommandedX = -9999;
+    let lastCommandedY = -9999;
     function handlePointerMove(e: PointerEvent) {
       // First-ever move is the cursor "appearing" from off-screen — snap
       // straight there rather than sweeping a giant one-time jump through
       // the whole board.
       if (!hasMouse) {
-        lastCommandedX = e.clientX;
-        lastCommandedY = e.clientY;
+        lastCommandedX = e.clientX + window.scrollX;
+        lastCommandedY = e.clientY + window.scrollY;
       }
-      mouseX = e.clientX;
-      mouseY = e.clientY;
+      lastClientX = e.clientX;
+      lastClientY = e.clientY;
       hasMouse = true;
     }
     document.addEventListener("pointermove", handlePointerMove);
@@ -202,16 +258,21 @@ export function FloatingShapes() {
     let frameId: number;
     function tick() {
       if (hasMouse) {
+        // Read scroll position fresh each frame — the document point under
+        // the cursor changes when the page scrolls even without a new
+        // pointermove event.
+        const docMouseX = lastClientX + window.scrollX;
+        const docMouseY = lastClientY + window.scrollY;
+
         // Sub-step the cursor's movement so a large jump between two
-        // pointermove events (a fast flick, or several queued moves
-        // arriving between animation frames) can't tunnel straight through
-        // a shape without the discrete collision check ever seeing an
-        // overlap — each step advances the cursor no further than its own
-        // radius. Each substep gets a proportional slice of the frame's
-        // timestep, so overall simulation speed doesn't change with the
-        // step count — only the cursor's own path gets finer-grained.
-        const dx = mouseX - lastCommandedX;
-        const dy = mouseY - lastCommandedY;
+        // updates (a fast flick, or scrolling) can't tunnel straight
+        // through a shape without the discrete collision check ever seeing
+        // an overlap — each step advances the cursor no further than its
+        // own radius. Each substep gets a proportional slice of the
+        // frame's timestep, so overall simulation speed doesn't change
+        // with the step count.
+        const dx = docMouseX - lastCommandedX;
+        const dy = docMouseY - lastCommandedY;
         const dist = Math.hypot(dx, dy);
         const steps = Math.min(20, Math.max(1, Math.ceil(dist / CURSOR_RADIUS)));
         const stepDelta = FRAME_MS / steps;
@@ -221,8 +282,21 @@ export function FloatingShapes() {
           Body.setPosition(cursorBody, { x: lastCommandedX + dx * t, y: lastCommandedY + dy * t });
           Engine.update(engine, stepDelta);
         }
-        lastCommandedX = mouseX;
-        lastCommandedY = mouseY;
+        lastCommandedX = docMouseX;
+        lastCommandedY = docMouseY;
+
+        // Hover feedback (a stand-in for "clickable" — see the intro
+        // comment): only meaningful once these have settled as page-nav
+        // elements, not while they're still drifting decoration.
+        if (gravityEngaged) {
+          const hits = Query.point(bodies, { x: docMouseX, y: docMouseY });
+          const newIndex = hits.length > 0 ? bodies.indexOf(hits[0]) : -1;
+          if (newIndex !== hoveredIndex) {
+            if (hoveredIndex >= 0) elements[hoveredIndex].style.filter = "";
+            if (newIndex >= 0) elements[newIndex].style.filter = HOVER_FILTER;
+            hoveredIndex = newIndex;
+          }
+        }
       } else {
         Engine.update(engine, FRAME_MS);
       }
@@ -238,6 +312,7 @@ export function FloatingShapes() {
 
     return () => {
       cancelAnimationFrame(frameId);
+      observer?.disconnect();
       document.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("resize", handleResize);
       Composite.clear(engine.world, false);
@@ -246,5 +321,5 @@ export function FloatingShapes() {
     };
   }, []);
 
-  return <svg ref={svgRef} aria-hidden className="pointer-events-none fixed inset-0 z-20 h-screen w-screen" />;
+  return <svg ref={svgRef} aria-hidden className="pointer-events-none absolute inset-x-0 top-0 z-20 w-full" />;
 }

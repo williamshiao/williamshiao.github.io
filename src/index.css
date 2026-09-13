@@ -25,18 +25,10 @@
 }
 
 @layer base {
-  html, body {
-    height: 100%;
-  }
-
   body {
-    overflow: hidden; /* fixed single-viewport "terrarium" — no page scroll */
-    overscroll-behavior: none;
     background-color: var(--color-canvas);
     color: var(--color-ink);
     font-family: var(--font-body);
-    /* BlobCursor sets `cursor: none` itself (desktop/hover-capable only) once it
-       mounts, and restores this on unmount — nothing to do here. */
   }
 
   h1, h2, h3 {
