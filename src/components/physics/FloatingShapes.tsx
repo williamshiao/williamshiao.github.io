@@ -490,12 +490,17 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
         return true;
       }
     })();
-    let glowButton: { glassEl: SVGCircleElement } | null = null;
+    let glowButton: { glassEl: SVGCircleElement; rayEls: SVGLineElement[] } | null = null;
     if (!glowEnabled) glowLayer.style.display = "none";
 
     function updateGlowButtonVisual() {
       if (!glowButton) return;
-      glowButton.glassEl.setAttribute("fill", glowEnabled ? "#fde047" : "#9ca3af");
+      glowButton.glassEl.setAttribute("fill", glowEnabled ? "#fde047" : "var(--color-surface)");
+      // The rays are the light actually being emitted — only make sense
+      // to show while the glow itself is on.
+      for (const ray of glowButton.rayEls) {
+        ray.style.display = glowEnabled ? "" : "none";
+      }
     }
 
     function toggleGlow() {
@@ -653,11 +658,11 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       updateSwitchVisual();
     }
 
-    // A little light bulb — glass, a zigzag filament, and a screw base —
-    // that toggles the glow layer on click (see toggleGlow). Same
-    // stencil-family outline treatment as the switch: bold var(--color-ink)
-    // strokes, a var(--color-surface)-ish base so it always matches the
-    // current theme.
+    // A little light bulb — radiating rays, glass, a coiled filament, and
+    // a ridged screw base — that toggles the glow layer on click (see
+    // toggleGlow). Same stencil-family outline treatment as the switch:
+    // bold var(--color-ink) strokes, a var(--color-surface)-ish base and
+    // shadow so it always matches the current theme.
     function spawnGlowButton(spec: ShapeSpec, x: number, y: number, vx: number, vy: number) {
       const body = createShapeBody(spec, x, y);
       Body.setVelocity(body, { x: vx, y: vy });
@@ -669,15 +674,47 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
 
       const r = spec.size;
       const line = "var(--color-ink)";
-      const strokeWidth = Math.max(1.5, r * 0.09);
+      const strokeWidth = Math.max(1.2, r * 0.075);
 
       const g = document.createElementNS(ns, "g") as SVGGElement;
       g.style.transition = "filter 0.15s ease";
 
+      // A soft resting shadow beneath the whole icon.
+      const shadow = document.createElementNS(ns, "ellipse");
+      shadow.setAttribute("cy", String(r * 0.82));
+      shadow.setAttribute("rx", String(r * 0.34));
+      shadow.setAttribute("ry", String(r * 0.06));
+      shadow.setAttribute("fill", line);
+      shadow.setAttribute("opacity", "0.15");
+      g.appendChild(shadow);
+
+      const glassCy = -r * 0.18;
+      const glassR = r * 0.52;
+
+      // Rays — the light actually being emitted, so they only exist while
+      // the glow is on (see updateGlowButtonVisual). Skips straight down,
+      // where the base sits.
+      const rayEls: SVGLineElement[] = [];
+      const rayInner = glassR + r * 0.1;
+      const rayOuter = glassR + r * 0.34;
+      for (const deg of [-90, -45, 0, 45, 135, 180, -135]) {
+        const rad = (deg * Math.PI) / 180;
+        const c = Math.cos(rad);
+        const s = Math.sin(rad);
+        const ray = document.createElementNS(ns, "line") as SVGLineElement;
+        ray.setAttribute("x1", (c * rayInner).toFixed(2));
+        ray.setAttribute("y1", (glassCy + s * rayInner).toFixed(2));
+        ray.setAttribute("x2", (c * rayOuter).toFixed(2));
+        ray.setAttribute("y2", (glassCy + s * rayOuter).toFixed(2));
+        ray.setAttribute("stroke", line);
+        ray.setAttribute("stroke-width", String(strokeWidth));
+        ray.setAttribute("stroke-linecap", "round");
+        g.appendChild(ray);
+        rayEls.push(ray);
+      }
+
       // The glass bulb — its fill is the on/off state color (see
       // updateGlowButtonVisual), everything else is fixed ink/surface.
-      const glassCy = -r * 0.1;
-      const glassR = r * 0.6;
       const glassEl = document.createElementNS(ns, "circle") as SVGCircleElement;
       glassEl.setAttribute("cy", String(glassCy));
       glassEl.setAttribute("r", String(glassR));
@@ -685,51 +722,63 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       glassEl.setAttribute("stroke-width", String(strokeWidth));
       g.appendChild(glassEl);
 
-      // A simple zigzag filament inside the glass.
-      const filamentY = glassCy + glassR * 0.35;
-      const filamentTop = glassCy - glassR * 0.35;
+      // A coiled filament inside the glass — two loops, not a plain
+      // zigzag, so it actually reads as a wire spring rather than a
+      // lightning bolt.
+      const fw = glassR * 0.38;
+      const topY = glassCy - glassR * 0.25;
+      const midY = glassCy - glassR * 0.02;
+      const botY = glassCy + glassR * 0.45;
       const filament = document.createElementNS(ns, "path");
       filament.setAttribute(
         "d",
-        `M ${(-r * 0.2).toFixed(2)} ${filamentY.toFixed(2)} L ${(-r * 0.06).toFixed(2)} ${filamentTop.toFixed(2)} L ${(r * 0.06).toFixed(2)} ${filamentY.toFixed(2)} L ${(r * 0.2).toFixed(2)} ${filamentTop.toFixed(2)}`,
+        `M ${(-fw * 0.75).toFixed(2)} ${botY.toFixed(2)} ` +
+          `C ${(-fw * 1.15).toFixed(2)} ${(glassCy + glassR * 0.05).toFixed(2)}, ${(-fw * 0.5).toFixed(2)} ${topY.toFixed(2)}, 0 ${midY.toFixed(2)} ` +
+          `C ${(fw * 0.5).toFixed(2)} ${topY.toFixed(2)}, ${(fw * 1.15).toFixed(2)} ${(glassCy + glassR * 0.05).toFixed(2)}, ${(fw * 0.75).toFixed(2)} ${botY.toFixed(2)}`,
       );
       filament.setAttribute("fill", "none");
       filament.setAttribute("stroke", line);
-      filament.setAttribute("stroke-width", String(strokeWidth * 0.55));
+      filament.setAttribute("stroke-width", String(strokeWidth * 0.75));
       filament.setAttribute("stroke-linecap", "round");
-      filament.setAttribute("stroke-linejoin", "round");
       g.appendChild(filament);
 
-      // Screw base — drawn last so it overlaps the bottom of the glass.
-      const baseW = r * 0.56;
-      const baseH = r * 0.34;
-      const baseY = r * 0.26;
-      const base = document.createElementNS(ns, "rect");
-      base.setAttribute("x", String(-baseW / 2));
-      base.setAttribute("y", String(baseY));
-      base.setAttribute("width", String(baseW));
-      base.setAttribute("height", String(baseH));
-      base.setAttribute("rx", String(r * 0.06));
-      base.setAttribute("fill", spec.color);
-      base.setAttribute("stroke", line);
-      base.setAttribute("stroke-width", String(strokeWidth * 0.85));
-      g.appendChild(base);
-
-      for (const ty of [baseY + baseH * 0.35, baseY + baseH * 0.68]) {
-        const thread = document.createElementNS(ns, "line");
-        thread.setAttribute("x1", String(-baseW / 2 + strokeWidth));
-        thread.setAttribute("y1", String(ty));
-        thread.setAttribute("x2", String(baseW / 2 - strokeWidth));
-        thread.setAttribute("y2", String(ty));
-        thread.setAttribute("stroke", line);
-        thread.setAttribute("stroke-width", String(strokeWidth * 0.5));
-        g.appendChild(thread);
+      // Ridged screw base — several stacked bands tapering slightly,
+      // rather than one plate with a couple of lines across it, plus a
+      // flat bottom cap.
+      const bandCount = 4;
+      const bandH = r * 0.09;
+      const bandGap = r * 0.045;
+      let bandY = glassCy + glassR * 0.86;
+      let bandW = r * 0.6;
+      for (let i = 0; i < bandCount; i++) {
+        const band = document.createElementNS(ns, "rect");
+        band.setAttribute("x", String(-bandW / 2));
+        band.setAttribute("y", bandY.toFixed(2));
+        band.setAttribute("width", String(bandW));
+        band.setAttribute("height", String(bandH));
+        band.setAttribute("rx", String(bandH * 0.3));
+        band.setAttribute("fill", spec.color);
+        band.setAttribute("stroke", line);
+        band.setAttribute("stroke-width", String(strokeWidth * 0.75));
+        g.appendChild(band);
+        bandY += bandH + bandGap;
+        bandW *= 0.94;
       }
+      const cap = document.createElementNS(ns, "rect");
+      cap.setAttribute("x", String(-bandW / 2));
+      cap.setAttribute("y", bandY.toFixed(2));
+      cap.setAttribute("width", String(bandW));
+      cap.setAttribute("height", String(r * 0.08));
+      cap.setAttribute("rx", String(r * 0.02));
+      cap.setAttribute("fill", spec.color);
+      cap.setAttribute("stroke", line);
+      cap.setAttribute("stroke-width", String(strokeWidth * 0.75));
+      g.appendChild(cap);
 
       shapeLayer.appendChild(g);
       elements.push(g);
 
-      glowButton = { glassEl };
+      glowButton = { glassEl, rayEls };
       updateGlowButtonVisual();
     }
 
