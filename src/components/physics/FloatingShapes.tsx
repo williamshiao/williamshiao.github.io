@@ -6,14 +6,21 @@ import { generateShapes, type ShapeSpec } from "./shapes";
  * A physics playground spanning two scroll-snapped sections: the top
  * "terrarium" (zero gravity, zero friction — shapes drift forever, bouncing
  * elastically off its walls, off each other, and off the cursor, which is
- * itself an invisible physical body) and a "floor" section below it. Once
- * the floor scrolls into view, gravity switches on for good: the floor wall
- * that was containing shapes in the terrarium relocates to the bottom of
- * the floor section, and everything still airborne falls through into it,
- * settles (restitution/friction both increase at that point, so they
- * actually come to rest instead of bouncing forever), and becomes
- * hoverable — this is the first step toward these becoming the site's page
- * navigation, so hovering one darkens it as a stand-in for "interactive."
+ * itself an invisible physical body) and a "floor" section below it. Which
+ * mode is active follows the *current* scroll position, not a one-way
+ * latch: whenever the floor section is in view, gravity is on, shapes
+ * settle (restitution/friction both increase so they actually come to
+ * rest instead of bouncing forever), and the cursor stops physically
+ * colliding with them (it becomes a sensor — still tracked, just can't
+ * knock things around) so you can actually point at and hover a settled
+ * shape without shoving it out from under the cursor first. Scrolling back
+ * up to the terrarium reverses all of that: gravity off, shapes elastic
+ * again, cursor collision back on.
+ *
+ * Two shape tiers (see ./shapes): a larger population of small decorative
+ * ones, and a handful of significantly bigger `interactive` ones — only
+ * those darken on hover once settled, since they're the ones meant to
+ * eventually double as real page navigation.
  *
  * Matter.js (MIT) rather than custom code: rigid-body elastic collision
  * among several bodies is its home turf. Position/size/color are generated
@@ -22,16 +29,20 @@ import { generateShapes, type ShapeSpec } from "./shapes";
 
 const { Engine, Bodies, Body, Composite, Query } = Matter;
 
-const SHAPE_COUNT = 8;
+const SMALL_SHAPE_COUNT = 12;
+const BIG_SHAPE_COUNT = 5;
 const WALL_THICKNESS = 100; // generous, so fast bodies can't tunnel through on one big step
 const CURSOR_RADIUS = 14;
 const CURSOR_MASS = 60; // heavy relative to the shapes — a paddle, not another puck
 const SPAWN_SPEED = 2.2; // px/frame, initial drift speed
 
 const GRAVITY_Y = 1;
-// Shapes are perfectly elastic/frictionless while floating (SETTLE_* below
-// is applied only once gravity engages) so they'd otherwise bounce on the
-// floor forever — these make them actually come to rest.
+// Shapes are perfectly elastic/frictionless while floating; SETTLE_* apply
+// only while gravity is engaged, so they actually come to rest on the
+// floor instead of bouncing forever. Switching back reverts to these.
+const ELASTIC_RESTITUTION = 1;
+const ELASTIC_FRICTION = 0;
+const ELASTIC_FRICTION_AIR = 0;
 const SETTLE_RESTITUTION = 0.4;
 const SETTLE_FRICTION = 0.06;
 const SETTLE_FRICTION_AIR = 0.02;
@@ -163,13 +174,14 @@ export function FloatingShapes() {
     // of initial velocity — Matter's own solver untangles any initial
     // overlap over the first few frames.
     const terrariumRect = getDocRect("[data-terrarium-bounds]");
-    const shapes = generateShapes(SHAPE_COUNT);
+    const shapes = generateShapes(SMALL_SHAPE_COUNT, BIG_SHAPE_COUNT);
     const ns = "http://www.w3.org/2000/svg";
     const shapeLayer = document.createElementNS(ns, "g");
     svg.appendChild(shapeLayer);
 
     const bodies: Matter.Body[] = [];
     const elements: SVGGElement[] = [];
+    const interactiveFlags: boolean[] = [];
     shapes.forEach((spec, i) => {
       const cx = terrariumRect ? terrariumRect.left + terrariumRect.width / 2 : window.innerWidth / 2;
       const cy = terrariumRect ? terrariumRect.top + terrariumRect.height / 2 : window.innerHeight / 2;
@@ -184,6 +196,7 @@ export function FloatingShapes() {
       Body.setVelocity(body, { x: Math.cos(dir) * SPAWN_SPEED, y: Math.sin(dir) * SPAWN_SPEED });
       Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.04);
       bodies.push(body);
+      interactiveFlags.push(spec.interactive);
 
       const g = document.createElementNS(ns, "g") as SVGGElement;
       g.style.transition = "filter 0.15s ease";
@@ -193,39 +206,13 @@ export function FloatingShapes() {
     });
     Composite.add(engine.world, bodies);
 
-    // Gravity engages once, permanently, when the floor section scrolls
-    // into view — this is a one-way narrative moment, not a toggle.
-    let hoveredIndex = -1;
-    function engageGravity() {
-      if (gravityEngaged) return;
-      gravityEngaged = true;
-      engine.gravity.y = GRAVITY_Y;
-      for (const body of bodies) {
-        Body.set(body, {
-          restitution: SETTLE_RESTITUTION,
-          friction: SETTLE_FRICTION,
-          frictionAir: SETTLE_FRICTION_AIR,
-        });
-      }
-      rebuildWalls();
-    }
-    const floorEl = document.querySelector("[data-floor-bounds]");
-    let observer: IntersectionObserver | null = null;
-    if (floorEl) {
-      observer = new IntersectionObserver(
-        (entries) => {
-          if (entries.some((entry) => entry.isIntersecting)) engageGravity();
-        },
-        { threshold: 0.3 },
-      );
-      observer.observe(floorEl);
-    }
-
     // The cursor is a real physics body — heavy relative to the shapes, and
     // manually driven to the mouse's *document* position every frame
     // (rather than left to the engine's own integration) so it always
     // tracks exactly, while still handing off realistic velocity to
-    // whatever it hits.
+    // whatever it hits. It's a sensor (no physical collision response)
+    // whenever gravity is engaged, so you can actually hover/click a
+    // settled shape without the cursor shoving it away first.
     const cursorBody = Bodies.circle(-9999, -9999, CURSOR_RADIUS, {
       restitution: 1,
       friction: 0,
@@ -234,6 +221,40 @@ export function FloatingShapes() {
       mass: CURSOR_MASS,
     });
     Composite.add(engine.world, cursorBody);
+
+    // Which mode is active follows the *current* scroll position (see the
+    // IntersectionObserver below), not a one-way latch — scrolling back up
+    // reverses all of it.
+    let hoveredIndex = -1;
+    function setGravityMode(enabled: boolean) {
+      if (enabled === gravityEngaged) return;
+      gravityEngaged = enabled;
+      engine.gravity.y = enabled ? GRAVITY_Y : 0;
+      Body.set(cursorBody, { isSensor: enabled });
+      const restitution = enabled ? SETTLE_RESTITUTION : ELASTIC_RESTITUTION;
+      const friction = enabled ? SETTLE_FRICTION : ELASTIC_FRICTION;
+      const frictionAir = enabled ? SETTLE_FRICTION_AIR : ELASTIC_FRICTION_AIR;
+      for (const body of bodies) {
+        Body.set(body, { restitution, friction, frictionAir });
+      }
+      if (!enabled && hoveredIndex >= 0) {
+        elements[hoveredIndex].style.filter = "";
+        hoveredIndex = -1;
+      }
+      rebuildWalls();
+    }
+    const floorEl = document.querySelector("[data-floor-bounds]");
+    let observer: IntersectionObserver | null = null;
+    if (floorEl) {
+      observer = new IntersectionObserver(
+        (entries) => {
+          const isVisible = entries.some((entry) => entry.isIntersecting);
+          setGravityMode(isVisible);
+        },
+        { threshold: 0.3 },
+      );
+      observer.observe(floorEl);
+    }
 
     let lastClientX = -9999;
     let lastClientY = -9999;
@@ -286,11 +307,12 @@ export function FloatingShapes() {
         lastCommandedY = docMouseY;
 
         // Hover feedback (a stand-in for "clickable" — see the intro
-        // comment): only meaningful once these have settled as page-nav
-        // elements, not while they're still drifting decoration.
+        // comment): only once settled, and only the big `interactive`
+        // shapes respond — the small ones stay purely decorative.
         if (gravityEngaged) {
           const hits = Query.point(bodies, { x: docMouseX, y: docMouseY });
-          const newIndex = hits.length > 0 ? bodies.indexOf(hits[0]) : -1;
+          const hitIndex = hits.length > 0 ? bodies.indexOf(hits[0]) : -1;
+          const newIndex = hitIndex >= 0 && interactiveFlags[hitIndex] ? hitIndex : -1;
           if (newIndex !== hoveredIndex) {
             if (hoveredIndex >= 0) elements[hoveredIndex].style.filter = "";
             if (newIndex >= 0) elements[newIndex].style.filter = HOVER_FILTER;

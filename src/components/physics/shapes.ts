@@ -2,6 +2,14 @@
  * Shape definitions for the floating/falling physics playground. Colors and
  * sizes are randomized fresh on every page load (generateShapes), not
  * baked in — only the kind mix and size/color *ranges* are fixed here.
+ *
+ * Two tiers: a larger population of small, purely decorative shapes, and a
+ * handful of significantly bigger ones (`interactive: true`) that are meant
+ * to eventually be the site's real page navigation — for now that just
+ * means they're the only ones that respond to hover once settled (see
+ * FloatingShapes), but keeping the flag on the shape itself now means the
+ * later "click a big shape to open a page" step doesn't need to touch this
+ * file again.
  */
 
 export type ShapeKind = "circle" | "rect" | "triangle";
@@ -15,6 +23,7 @@ export interface ShapeSpec {
   /** Rect only — the box's other half-extent (size is half-width, this is half-height). */
   size2?: number;
   rotation?: number;
+  interactive: boolean;
 }
 
 const KIND_WEIGHTS: { kind: ShapeKind; weight: number }[] = [
@@ -47,17 +56,35 @@ function randomColor(): string {
   return `hsl(${hue}deg ${saturation.toFixed(0)}% ${lightness.toFixed(0)}%)`;
 }
 
-export function generateShapes(count: number): ShapeSpec[] {
-  return Array.from({ length: count }, (_, i) => {
-    const kind = pickKind();
-    const color = randomColor();
-    const rotation = randomBetween(-0.6, 0.6);
-    if (kind === "rect") {
-      return { id: `shape-${i}`, kind, color, size: randomBetween(38, 62), size2: randomBetween(38, 62), rotation };
-    }
-    if (kind === "triangle") {
-      return { id: `shape-${i}`, kind, color, size: randomBetween(48, 76), rotation };
-    }
-    return { id: `shape-${i}`, kind, color, size: randomBetween(44, 74) };
-  });
+interface SizeRange {
+  circle: [number, number];
+  rectHalf: [number, number];
+  triangle: [number, number];
+}
+
+const SMALL_SIZE: SizeRange = { circle: [26, 42], rectHalf: [24, 38], triangle: [30, 46] };
+// Roughly 3x the small tier — unmistakably a different class of object, not
+// just "a slightly bigger circle".
+const BIG_SIZE: SizeRange = { circle: [95, 135], rectHalf: [80, 115], triangle: [100, 140] };
+
+function makeShape(id: string, interactive: boolean, range: SizeRange): ShapeSpec {
+  const kind = pickKind();
+  const color = randomColor();
+  const rotation = randomBetween(-0.6, 0.6);
+  if (kind === "rect") {
+    const [min, max] = range.rectHalf;
+    return { id, kind, color, size: randomBetween(min, max), size2: randomBetween(min, max), rotation, interactive };
+  }
+  if (kind === "triangle") {
+    const [min, max] = range.triangle;
+    return { id, kind, color, size: randomBetween(min, max), rotation, interactive };
+  }
+  const [min, max] = range.circle;
+  return { id, kind, color, size: randomBetween(min, max), interactive };
+}
+
+export function generateShapes(smallCount: number, bigCount: number): ShapeSpec[] {
+  const small = Array.from({ length: smallCount }, (_, i) => makeShape(`small-${i}`, false, SMALL_SIZE));
+  const big = Array.from({ length: bigCount }, (_, i) => makeShape(`big-${i}`, true, BIG_SIZE));
+  return [...small, ...big];
 }
