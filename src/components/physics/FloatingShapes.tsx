@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import Matter from "matter-js";
-import { generateShapes, makeArrowShape, type ShapeSpec } from "./shapes";
+import { generateShapes, type ShapeSpec } from "./shapes";
 
 /**
  * A physics playground spanning one continuous, seamless plate (see
@@ -35,6 +35,16 @@ import { generateShapes, makeArrowShape, type ShapeSpec } from "./shapes";
  * restarts immediately instead of shapes just sitting wherever gravity
  * left them.
  *
+ * Clicking the one shape tagged with a `pageId` (see ./shapes) once
+ * settled grows it in place — via Body.scale + Body.setPosition each
+ * frame, so it's a real collider the whole time and physically shoves
+ * every other shape out of the way as it expands — into a big rounded
+ * panel parked at the center of the viewport, at which point the caller
+ * (see onOpenPanel) renders that page's real content on top of it.
+ * Clicking outside the panel reverses the animation and swaps the body
+ * back to its original shape/size, dropping it back into normal gravity
+ * like anything else.
+ *
  * Matter.js (MIT) rather than custom code: rigid-body elastic collision
  * among several bodies is its home turf. Position/size/color are generated
  * fresh every load (see ./shapes) rather than fixed.
@@ -43,7 +53,6 @@ import { generateShapes, makeArrowShape, type ShapeSpec } from "./shapes";
 const { Engine, Bodies, Body, Composite, Query } = Matter;
 
 const PLATE_SELECTOR = "[data-plate-bounds]";
-const SCROLL_CUE_SELECTOR = "[data-scroll-cue]";
 const SMALL_SHAPE_COUNT = 12;
 const BIG_SHAPE_COUNT = 5;
 const WALL_THICKNESS = 100; // generous, so fast bodies can't tunnel through on one big step
@@ -84,6 +93,13 @@ const WHEEL_DEADZONE = 4;
 // Upward relaunch speed range (px/frame) when snapping back to zero-g.
 const LAUNCH_SPEED_MIN = 9;
 const LAUNCH_SPEED_MAX = 16;
+
+// The expand/shrink panel animation and its resting size, capped so it
+// never gets absurd on a huge monitor.
+const PANEL_DURATION_MS = 650;
+const PANEL_MAX_WIDTH = 760;
+const PANEL_MAX_HEIGHT = 640;
+const PANEL_RADIUS = 32;
 
 function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
@@ -156,8 +172,30 @@ function createShapeElement(spec: ShapeSpec): SVGGraphicsElement {
   return el;
 }
 
-export function FloatingShapes() {
+interface FloatingShapesProps {
+  /** Called once a clicked shape finishes expanding into its panel — the
+   * caller is responsible for rendering that page's actual content on top
+   * of it (see App.tsx). `accentColor` is the shape's own color, handed
+   * back so the content overlay can echo it (e.g. as a border). */
+  onOpenPanel?: (pageId: string, accentColor: string) => void;
+  /** Called the instant the user clicks outside the panel — before the
+   * shrink animation finishes, so the caller can hide its content overlay
+   * right away rather than waiting on the physics. */
+  onClosePanel?: () => void;
+}
+
+export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProps) {
   const svgRef = useRef<SVGSVGElement>(null);
+  // Refs rather than effect deps: the physics world below is built exactly
+  // once (see the `[]` dependency array), and re-running all of that just
+  // because the parent passed a fresh inline callback would tear down and
+  // respawn every shape.
+  const onOpenPanelRef = useRef(onOpenPanel);
+  const onClosePanelRef = useRef(onClosePanel);
+  useEffect(() => {
+    onOpenPanelRef.current = onOpenPanel;
+    onClosePanelRef.current = onClosePanel;
+  }, [onOpenPanel, onClosePanel]);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -253,17 +291,18 @@ export function FloatingShapes() {
 
     const bodies: Matter.Body[] = [];
     const elements: SVGGElement[] = [];
-    const interactiveFlags: boolean[] = [];
+    const specs: ShapeSpec[] = [];
 
     // Adds one shape to every parallel array/the world/the SVG at once —
-    // shared by the initial spawn below and by the scroll-cue arrow
-    // "breaking off" into a real shape later (see convertArrowToShape).
+    // used for the initial spawn below (index i's specs/bodies/elements
+    // always refer to the same shape, which the click-to-expand code
+    // below relies on for lookup/restore).
     function spawnShape(spec: ShapeSpec, x: number, y: number, vx: number, vy: number) {
       const body = createShapeBody(spec, x, y);
       Body.setVelocity(body, { x: vx, y: vy });
       Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.04);
       bodies.push(body);
-      interactiveFlags.push(spec.interactive);
+      specs.push(spec);
       Composite.add(engine.world, body);
 
       const g = document.createElementNS(ns, "g") as SVGGElement;
@@ -361,32 +400,177 @@ export function FloatingShapes() {
       }
     }
 
-    // The "scroll down" cue (see ScrollCue) is a normal fixed UI element
-    // right up until the first time the user actually scrolls down, at
-    // which point it fades out here and a matching triangle is born into
-    // the physics world in its place — the arrow "breaking off" to join
-    // the other shapes for good. One-time: it never comes back once
-    // converted, even after scrolling back up and down again.
-    let arrowConverted = false;
-    function convertArrowToShape() {
-      if (arrowConverted) return;
-      arrowConverted = true;
-
-      const cueRect = getDocRect(SCROLL_CUE_SELECTOR);
-      const cueEl = document.querySelector<HTMLElement>(SCROLL_CUE_SELECTOR);
-      if (cueEl) {
-        cueEl.style.transition = "opacity 0.25s ease";
-        cueEl.style.opacity = "0";
-      }
-      if (!cueRect) return;
-
-      const spec = makeArrowShape();
-      const x = cueRect.left + cueRect.width / 2;
-      const y = cueRect.top + cueRect.height / 2;
-      // A gentle downward drift, as if it just let go and dropped into the
-      // mix, rather than the fully random spawn velocity of the others.
-      spawnShape(spec, x, y, (Math.random() - 0.5) * 3, 2 + Math.random() * 2);
+    // Click-to-expand: the one shape tagged with a pageId (see ./shapes)
+    // grows in place into a big rounded panel, shoving every other shape
+    // out of the way as it does (it's a real, solid collider throughout —
+    // see animatePanelTo), then hands off to the caller to render that
+    // page's content on top. `panelState` being non-null is also what
+    // blocks scrolling and other-shape hover/click while a panel is open.
+    interface PanelState {
+      index: number;
+      spec: ShapeSpec;
+      rectEl: SVGRectElement;
+      // The shape's original footprint/position, to animate back to on close.
+      originX: number;
+      originY: number;
+      originHw: number;
+      originHh: number;
+      // Live values, updated every animation frame in either direction.
+      hw: number;
+      hh: number;
+      x: number;
+      y: number;
     }
+    let panelState: PanelState | null = null;
+    let panelAnimFrame: number | null = null;
+
+    function halfExtentsOf(spec: ShapeSpec): { hw: number; hh: number } {
+      if (spec.kind === "rect") return { hw: spec.size, hh: spec.size2 ?? spec.size };
+      // Circle radius / triangle circumradius are both already a
+      // reasonable half-extent approximation for a starting rectangle.
+      return { hw: spec.size, hh: spec.size };
+    }
+
+    function replaceBodyAt(index: number, next: Matter.Body) {
+      Composite.remove(engine.world, bodies[index]);
+      bodies[index] = next;
+      Composite.add(engine.world, next);
+    }
+
+    // Drives both expand and shrink: eases the panel body's size/position
+    // from panelState's current live values to the given target over
+    // PANEL_DURATION_MS, scaling the real physics body every frame (so it
+    // keeps shoving other bodies out of its growing footprint) and
+    // updating the <rect>'s attributes to match — position/rotation are
+    // already handled every frame by the main tick() loop below, since
+    // bodies[index] is this same body.
+    function animatePanelTo(toHw: number, toHh: number, toX: number, toY: number, onDone?: () => void) {
+      const ps = panelState;
+      if (!ps) return;
+      const body = bodies[ps.index];
+      const fromHw = ps.hw;
+      const fromHh = ps.hh;
+      const fromX = ps.x;
+      const fromY = ps.y;
+      if (panelAnimFrame !== null) cancelAnimationFrame(panelAnimFrame);
+      const startTime = performance.now();
+      let prevHw = fromHw;
+      let prevHh = fromHh;
+      const step = (now: number) => {
+        const t = Math.min(1, (now - startTime) / PANEL_DURATION_MS);
+        const eased = easeInOutCubic(t);
+        const hw = fromHw + (toHw - fromHw) * eased;
+        const hh = fromHh + (toHh - fromHh) * eased;
+        const x = fromX + (toX - fromX) * eased;
+        const y = fromY + (toY - fromY) * eased;
+
+        const scaleX = hw / prevHw;
+        const scaleY = hh / prevHh;
+        if (scaleX !== 1 || scaleY !== 1) Body.scale(body, scaleX, scaleY);
+        Body.setPosition(body, { x, y });
+        prevHw = hw;
+        prevHh = hh;
+
+        ps.hw = hw;
+        ps.hh = hh;
+        ps.x = x;
+        ps.y = y;
+        ps.rectEl.setAttribute("width", String(hw * 2));
+        ps.rectEl.setAttribute("height", String(hh * 2));
+        ps.rectEl.setAttribute("x", String(-hw));
+        ps.rectEl.setAttribute("y", String(-hh));
+        ps.rectEl.setAttribute("rx", String(Math.min(hw, hh, PANEL_RADIUS)));
+
+        if (t < 1) {
+          panelAnimFrame = requestAnimationFrame(step);
+        } else {
+          panelAnimFrame = null;
+          onDone?.();
+        }
+      };
+      panelAnimFrame = requestAnimationFrame(step);
+    }
+
+    function beginExpand(index: number) {
+      if (panelState || transitioning) return;
+      const spec = specs[index];
+      if (!spec.pageId) return;
+      if (hoveredIndex === index) {
+        elements[index].style.filter = "";
+        hoveredIndex = -1;
+      }
+
+      const body = bodies[index];
+      const { hw, hh } = halfExtentsOf(spec);
+      const x = body.position.x;
+      const y = body.position.y;
+
+      // Swap to a plain rectangle body seeded at the original footprint
+      // (rather than trying to smoothly morph a circle/triangle's actual
+      // vertices) so the very first frame of growth is seamless regardless
+      // of the original shape's kind, and stays a simple, predictable
+      // collider for the rest of the animation.
+      const rectBody = Bodies.rectangle(x, y, hw * 2, hh * 2, { isStatic: true, restitution: 0, friction: 0 });
+      replaceBodyAt(index, rectBody);
+
+      const rectEl = document.createElementNS(ns, "rect") as SVGRectElement;
+      rectEl.setAttribute("width", String(hw * 2));
+      rectEl.setAttribute("height", String(hh * 2));
+      rectEl.setAttribute("x", String(-hw));
+      rectEl.setAttribute("y", String(-hh));
+      rectEl.setAttribute("rx", String(Math.min(hw, hh, PANEL_RADIUS)));
+      rectEl.setAttribute("fill", spec.color);
+      rectEl.style.transition = "fill 0.35s ease";
+      elements[index].replaceChildren(rectEl);
+
+      panelState = { index, spec, rectEl, originX: x, originY: y, originHw: hw, originHh: hh, hw, hh, x, y };
+
+      const targetHw = Math.min(window.innerWidth * 0.43, PANEL_MAX_WIDTH / 2);
+      const targetHh = Math.min(window.innerHeight * 0.39, PANEL_MAX_HEIGHT / 2);
+      const targetX = window.scrollX + window.innerWidth / 2;
+      const targetY = window.scrollY + window.innerHeight / 2;
+
+      animatePanelTo(targetHw, targetHh, targetX, targetY, () => {
+        rectEl.style.fill = "var(--color-surface)";
+        rectEl.setAttribute("stroke", spec.color);
+        rectEl.setAttribute("stroke-width", "3");
+        onOpenPanelRef.current?.(spec.pageId!, spec.color);
+      });
+    }
+
+    function beginShrink() {
+      const ps = panelState;
+      if (!ps) return;
+      ps.rectEl.style.fill = ps.spec.color;
+      ps.rectEl.removeAttribute("stroke");
+      onClosePanelRef.current?.();
+
+      animatePanelTo(ps.originHw, ps.originHh, ps.originX, ps.originY, () => {
+        const restored = createShapeBody(ps.spec, ps.x, ps.y);
+        replaceBodyAt(ps.index, restored);
+        elements[ps.index].replaceChildren(createShapeElement(ps.spec));
+        panelState = null;
+      });
+    }
+
+    function handlePointerDown(e: PointerEvent) {
+      if (transitioning) return;
+      if (panelState) {
+        const target = e.target as Element | null;
+        if (target?.closest("[data-panel-overlay]")) return; // a click inside the content itself
+        beginShrink();
+        return;
+      }
+      if (!gravityEngaged) return; // only clickable once settled, same as hover
+      const docX = e.clientX + window.scrollX;
+      const docY = e.clientY + window.scrollY;
+      const hits = Query.point(bodies, { x: docX, y: docY });
+      const hitIndex = hits.length > 0 ? bodies.indexOf(hits[0]) : -1;
+      if (hitIndex >= 0 && specs[hitIndex].pageId) {
+        beginExpand(hitIndex);
+      }
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
 
     // Snap-scroll: the page is only ever fully docked at the top (zero-g
     // hero) or fully at the bottom (gravity-settled) section — one wheel
@@ -424,10 +608,9 @@ export function FloatingShapes() {
 
     function handleWheel(e: WheelEvent) {
       e.preventDefault();
-      if (transitioning || Math.abs(e.deltaY) < WHEEL_DEADZONE) return;
+      if (transitioning || panelState || Math.abs(e.deltaY) < WHEEL_DEADZONE) return;
       if (e.deltaY > 0 && atTop) {
         atTop = false;
-        convertArrowToShape();
         animateScrollTo(window.innerHeight);
       } else if (e.deltaY < 0 && !atTop) {
         atTop = true;
@@ -477,12 +660,14 @@ export function FloatingShapes() {
         lastCommandedY = docMouseY;
 
         // Hover feedback (a stand-in for "clickable" — see the intro
-        // comment): only once settled, and only the big `interactive`
-        // shapes respond — the small ones stay purely decorative.
-        if (gravityEngaged) {
+        // comment): only once settled, only the big `interactive` shapes
+        // respond, and not while a panel is already open (its body is
+        // technically still hit-testable, but it's a UI panel now, not a
+        // shape to darken).
+        if (gravityEngaged && !panelState) {
           const hits = Query.point(bodies, { x: docMouseX, y: docMouseY });
           const hitIndex = hits.length > 0 ? bodies.indexOf(hits[0]) : -1;
-          const newIndex = hitIndex >= 0 && interactiveFlags[hitIndex] ? hitIndex : -1;
+          const newIndex = hitIndex >= 0 && specs[hitIndex].interactive ? hitIndex : -1;
           if (newIndex !== hoveredIndex) {
             if (hoveredIndex >= 0) elements[hoveredIndex].style.filter = "";
             if (newIndex >= 0) elements[newIndex].style.filter = HOVER_FILTER;
@@ -506,7 +691,9 @@ export function FloatingShapes() {
       cancelAnimationFrame(frameId);
       if (scrollAnimFrame !== null) cancelAnimationFrame(scrollAnimFrame);
       if (cooldownTimer !== null) clearTimeout(cooldownTimer);
+      if (panelAnimFrame !== null) cancelAnimationFrame(panelAnimFrame);
       document.removeEventListener("pointermove", handlePointerMove);
+      document.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("wheel", handleWheel);
       Composite.clear(engine.world, false);
