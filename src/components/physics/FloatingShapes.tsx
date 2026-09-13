@@ -44,6 +44,16 @@ import { STRINGS, type Lang } from "../../i18n/strings";
  * restarts immediately instead of shapes just sitting wherever gravity
  * left them.
  *
+ * Once at the bottom, scrolling becomes a timeline through every pageId
+ * shape in turn (see pageShapeIndices/goToPageShape/goToHero, all in the
+ * wheel listener below): down steps to the next one — closing whatever's
+ * currently open and opening the next in the same motion, not two separate
+ * close-then-click steps — up steps back, and stepping up from the very
+ * first page returns to the hero. `pageIndex` (0 = hero, 1..N = which page)
+ * is the one source of truth for where the timeline currently is, kept in
+ * sync by manual clicks (see handlePointerDown) too, so scrolling
+ * afterward always continues on from wherever a click just left off.
+ *
  * Clicking any shape tagged with a `pageId` (see ./shapes — always forced
  * to `kind: "rect"`, so growing it never has to visibly snap from
  * round/triangular to rectangular the instant it starts) once settled
@@ -1239,6 +1249,27 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
     // it regardless of exactly when or how contact started. Only the
     // cursor doesn't count as "anything"; every wall and every other shape
     // does, per "the moment it collides with anything" once it's arrived.
+    // Every pageId shape, in spawn order (Internships, then Contact, then
+    // whatever gets added after it in ./shapes) — the scroll-driven
+    // timeline below (see handleWheel/goToPageShape) steps through these
+    // one at a time, in order, regardless of where each one actually
+    // happens to be sitting on the board.
+    const pageShapeIndices = specs.reduce<number[]>((acc, s, i) => {
+      if (s.pageId) acc.push(i);
+      return acc;
+    }, []);
+    const maxPageIndex = pageShapeIndices.length;
+    // 0 = the hero/landing section, nothing open; 1..maxPageIndex = which
+    // page's shape should be open. Kept in sync by both the wheel-driven
+    // timeline and any manual click (see handlePointerDown) so the two
+    // ways of navigating never disagree about where the visitor is.
+    let pageIndex = 0;
+    // True for the whole close-then-open chain a page-to-page step runs
+    // (see goToPageShape/goToHero) — blocks another wheel tick from
+    // landing mid-chain, the same way `transitioning` blocks another
+    // hero<->bottom snap mid-animation.
+    let panelNavigating = false;
+
     const internshipsIndex = specs.findIndex((s) => s.pageId === "internships");
     let internshipsAutoOpened = false;
     function handleInternshipsAutoOpen(event: Matter.IEventCollision<Matter.Engine>) {
@@ -1257,7 +1288,10 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
           // body), which is asking for trouble done reentrantly, mid-step.
           autoExpandTimer = setTimeout(() => {
             autoExpandTimer = null;
-            if (gravityEngaged && !panelState && !transitioning) beginExpand(index);
+            if (gravityEngaged && !panelState && !transitioning) {
+              pageIndex = 1; // should already be 1 (see handleWheel) — belt and suspenders
+              beginExpand(index);
+            }
           }, AUTO_EXPAND_DELAY_MS);
         }
         return;
@@ -1564,6 +1598,12 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
         const hitIndex = hits.length > 0 ? bodies.indexOf(hits[0]) : -1;
         const hitSpec = hitIndex >= 0 ? specs[hitIndex] : null;
         if (hitSpec?.pageId && hitIndex !== openIndex) {
+          // Keeps the wheel-driven timeline (see handleWheel) in step with
+          // wherever a manual click just took the visitor, so scrolling
+          // afterward continues on from *here* rather than from wherever
+          // it last was.
+          const nav = pageShapeIndices.indexOf(hitIndex) + 1;
+          if (nav > 0) pageIndex = nav;
           beginShrink(() => beginExpand(hitIndex));
         } else {
           beginShrink();
@@ -1578,6 +1618,8 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       if (hitIndex < 0) return;
       const hitSpec = specs[hitIndex];
       if (hitSpec.pageId) {
+        const nav = pageShapeIndices.indexOf(hitIndex) + 1;
+        if (nav > 0) pageIndex = nav;
         beginExpand(hitIndex);
       } else if (hitSpec.kind === "switch") {
         toggleNightMode();
@@ -1623,19 +1665,70 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       scrollAnimFrame = requestAnimationFrame(step);
     }
 
+    // Opens the `nav`th page (1-based — nav 1 is pageShapeIndices[0], and
+    // so on), closing whatever's currently open first if anything is —
+    // this is what turns a wheel tick into "close the current page, open
+    // the next/previous one" instead of requiring a separate click. Used
+    // for every page-to-page step; the hero<->page-1 step is handled
+    // separately in handleWheel since that one also has to scroll.
+    function goToPageShape(nav: number) {
+      const shapeIndex = pageShapeIndices[nav - 1];
+      if (shapeIndex === undefined) return;
+      pageIndex = nav;
+      if (panelState) {
+        panelNavigating = true;
+        beginShrink(() => {
+          panelNavigating = false;
+          beginExpand(shapeIndex);
+        });
+      } else {
+        beginExpand(shapeIndex);
+      }
+    }
+
+    // The hero end of the timeline: closes whatever page is open (if any),
+    // scrolls back up, and relaunches the shapes upward, all together —
+    // same as the original scroll-up-from-the-bottom behavior, just also
+    // reachable from a couple of pages deep instead of only the first one.
+    function goToHero() {
+      pageIndex = 0;
+      atTop = true;
+      manualGravityOverride = false;
+      if (panelState) {
+        panelNavigating = true;
+        beginShrink(() => {
+          panelNavigating = false;
+        });
+      }
+      launchShapesUpward();
+      animateScrollTo(0, () => {
+        manualGravityOverride = null;
+      });
+    }
+
     function handleWheel(e: WheelEvent) {
       e.preventDefault();
-      if (transitioning || panelState || Math.abs(e.deltaY) < WHEEL_DEADZONE) return;
-      if (e.deltaY > 0 && atTop) {
-        atTop = false;
-        animateScrollTo(window.innerHeight);
-      } else if (e.deltaY < 0 && !atTop) {
-        atTop = true;
-        manualGravityOverride = false;
-        launchShapesUpward();
-        animateScrollTo(0, () => {
-          manualGravityOverride = null;
-        });
+      if (transitioning || panelNavigating || Math.abs(e.deltaY) < WHEEL_DEADZONE) return;
+      if (e.deltaY > 0) {
+        if (atTop) {
+          // hero -> page 1: Internships opens itself once it actually
+          // lands (see handleInternshipsAutoOpen), not from here directly.
+          atTop = false;
+          pageIndex = 1;
+          animateScrollTo(window.innerHeight);
+        } else if (!panelState) {
+          // Nothing open right now — either the current page's shape is
+          // still mid-fall (pageIndex was already set heading into the
+          // bottom section, above) or a panel was closed manually. Either
+          // way, make sure *that* one opens rather than skipping past it.
+          goToPageShape(Math.max(1, pageIndex));
+        } else if (pageIndex < maxPageIndex) {
+          goToPageShape(pageIndex + 1);
+        }
+      } else if (pageIndex > 1) {
+        goToPageShape(pageIndex - 1);
+      } else if (!atTop) {
+        goToHero();
       }
     }
     window.addEventListener("wheel", handleWheel, { passive: false });
