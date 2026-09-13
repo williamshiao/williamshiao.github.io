@@ -24,18 +24,16 @@ export function Hero() {
           which is what threw the centering off. */}
       <div className="relative flex w-full flex-col items-center">
         <p className="font-pixel text-xs uppercase tracking-widest text-ditto sm:text-sm">{t("heroTagline")}</p>
-        {/* data-shape-knockout: stays plain/normal here (this is the *base*
-            layer, still under FloatingShapes' shapes — see its z-index).
-            FloatingShapes finds this element and paints a separate white
-            "knockout" copy of it directly above the shapes layer,
-            live-clipped every frame to the union of the shapes' own current
-            silhouettes — so a shape passing over genuinely pokes the name
-            through in white exactly where it overlaps, while it stays its
-            normal color everywhere else. See FloatingShapes' intro comment
-            for why this isn't done with mix-blend-mode. Only the name gets
-            this, not the tagline above — at that small a font size, even a
-            hairline sub-pixel gap between the real text and its synthetic
-            copy reads as visibly misaligned. */}
+        {/* data-shape-knockout: FloatingShapes measures *this* element's own
+            box (position/width only — never its font) and mirrors it onto a
+            separate white copy of the same text that it renders itself,
+            genuinely stacked above the shapes layer (not nested in here,
+            which sits *below* the shapes — see FloatingShapes' intro comment
+            for why a plain z-index on something inside this low-z container
+            could never paint above them). That copy uses the exact same
+            Tailwind classes as this one, so its own font/line-wrap is real
+            CSS, not a JS-guessed approximation — only its left/top/width
+            need to be kept in sync, which is just geometry, not fonts. */}
         <h1
           data-shape-knockout
           className="mt-6 text-balance text-center font-display text-7xl font-semibold tracking-tight text-ink sm:text-8xl lg:text-9xl"
