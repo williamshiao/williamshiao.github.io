@@ -103,12 +103,15 @@ const SETTLE_FRICTION_AIR = 0.02;
 const HOVER_FILTER = "brightness(0.72)";
 
 // Every shape's soft color glow — see the intro comment for how the
-// overlap-blending actually works. Bigger shapes get a wider blur so the
-// glow still reads proportionally at that scale.
+// overlap-blending actually works. Modeled on the Hero's own background
+// glow blobs (see Hero.tsx: huge blur relative to size, low opacity) so
+// it reads as the same kind of soft ambient light, not a crisp colored
+// ring — bigger shapes get a proportionally wider blur so it still fades
+// out fully rather than looking like a smaller, tighter version.
 const GLOW_SCALE = 1.45;
-const GLOW_OPACITY = 0.32;
-const GLOW_BLUR_SMALL = 7;
-const GLOW_BLUR_BIG = 15;
+const GLOW_OPACITY = 0.22;
+const GLOW_BLUR_SMALL = 16;
+const GLOW_BLUR_BIG = 34;
 
 // One wheel notch/flick snaps the whole way to the other section — smooth,
 // not instant, and not a fast snap either.
