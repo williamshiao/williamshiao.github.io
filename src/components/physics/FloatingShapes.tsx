@@ -53,12 +53,17 @@ import {
  * onOpenPanel) renders that page's real content on top of it. Clicking
  * outside the panel reverses the animation and swaps the body back to
  * its original shape/size, dropping it back into normal gravity like
- * anything else. Its label (see createLabelElement) fades in once
- * settled — labeling something before it's actually clickable would be
- * more confusing than not labeling it at all — and the system cursor
- * turns into a pointer over anything that really does something on
- * click (a pageId shape, the switch, the glow button), not just
- * anything that merely darkens on hover.
+ * anything else. Its label (see createLabelElement) only starts its slow
+ * fade-in the instant the shape actually touches the floor (a real
+ * collisionStart against floorWall, see handleFloorCollision) — not the
+ * instant gravity merely turns on, which happens while it's still
+ * mid-air near the top of the fall. Labeling something before it can be
+ * clicked would be confusing, and the extra beat of "falls, lands, *then*
+ * lights up" reads as a much more deliberate reveal than a plain
+ * opacity snap the moment gravity engages. The system cursor turns into
+ * a pointer over anything that really does something on click (a pageId
+ * shape, the switch, the glow button), not just anything that merely
+ * darkens on hover.
  *
  * A second special shape — a small rocker-switch rectangle (see
  * makeLightSwitchShape) — toggles the site's night mode on click: flips
@@ -86,7 +91,7 @@ import {
  * fresh every load (see ./shapes) rather than fixed.
  */
 
-const { Engine, Bodies, Body, Composite, Query } = Matter;
+const { Engine, Bodies, Body, Composite, Query, Events } = Matter;
 
 const PLATE_SELECTOR = "[data-plate-bounds]";
 // Fewer small shapes than before — with a dozen of them bouncing around in
@@ -134,6 +139,11 @@ const SETTLE_FRICTION = 0.06;
 const SETTLE_FRICTION_AIR = 0.02;
 
 const HOVER_FILTER = "brightness(0.72)";
+
+// A labeled shape's reveal-on-landing is slow and deliberate; every other
+// opacity change on it (hiding again, expand/shrink) stays snappy.
+const LABEL_REVEAL_MS = 1400;
+const LABEL_HIDE_MS = 200;
 
 // Every shape's soft color glow — see the intro comment for how the
 // overlap-blending actually works. Modeled on the Hero's own background
@@ -306,17 +316,24 @@ function isClickableSpec(spec: ShapeSpec): boolean {
  * text with a dark outline (paint-order stroke, not just a fill) so it
  * stays legible over any of the site's randomized shape colors, not just
  * the ones it happens to contrast with. Starts invisible: FloatingShapes
- * fades it in once the shape is actually clickable (settled) rather than
- * labeling something that can't be clicked yet. Returns null for any
- * shape without a label, so callers can push the result straight into
- * their parallel array without a separate branch. */
+ * fades it in slowly (see the floor-collision listener) the moment the
+ * shape actually lands, rather than the instant gravity merely turns on
+ * — labeling something mid-fall, before it can be clicked, would be
+ * confusing, and revealing it as a quick snap would undersell the
+ * moment. Returns null for any shape without a label, so callers can
+ * push the result straight into their parallel array without a separate
+ * branch. */
 function createLabelElement(spec: ShapeSpec): SVGGElement | null {
   if (!spec.label) return null;
   const ns = "http://www.w3.org/2000/svg";
   const g = document.createElementNS(ns, "g") as SVGGElement;
   g.setAttribute("aria-hidden", "true");
   g.style.opacity = "0";
-  g.style.transition = "opacity 0.3s ease";
+  // Duration is set per-trigger (see handleFloorCollision vs. the various
+  // hide points below) rather than fixed here — only the floor-landing
+  // reveal itself should be slow/dramatic; hiding it again (scrolling
+  // back up, opening its panel) should stay snappy.
+  g.style.transition = `opacity ${LABEL_HIDE_MS}ms ease`;
   const text = document.createElementNS(ns, "text");
   text.setAttribute("text-anchor", "middle");
   text.setAttribute("dominant-baseline", "central");
@@ -488,9 +505,15 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
     // entirely (see the intro comment).
     const glowElements: (SVGGElement | null)[] = [];
     // Parallel too; non-null only for the one shape with a pageId/label
-    // (see spawnLabelFor). Faded in once settled, hidden again while its
-    // panel is open (see beginExpand/beginShrink).
+    // (see spawnLabelFor). Faded in slowly the moment its shape actually
+    // lands on the floor (see the collisionStart listener below), hidden
+    // again while its panel is open (see beginExpand/beginShrink) or once
+    // it's relaunched back into zero-g.
     const labelElements: (SVGGElement | null)[] = [];
+    // Which labeled shapes have already played their landing reveal
+    // during the *current* fall — cleared on every disengage so the same
+    // dramatic beat replays each time it scrolls down and lands again.
+    const landedLabelIndices = new Set<number>();
 
     // Ditto gets a real rigid circle body too (see createShapeBody) so it
     // collides with everything normally, but its *visual* is a soft-body
@@ -874,6 +897,34 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       }
     });
 
+    // The dramatic reveal: the moment a labeled shape actually touches the
+    // ground (a real physics collision, not just "gravity is on now" —
+    // that fires the instant it's still mid-air near the top of its
+    // fall), its label starts its slow fade-in (see createLabelElement's
+    // transition). "The ground" means the floor or another shape it's
+    // come to rest on — shapes settle into a pile, not a neat row all
+    // touching the floor directly, so a resting shape may only ever touch
+    // its neighbors. Side/top walls and the cursor (a sensor once
+    // settled, not something you "land" on) don't count. Guarded by
+    // landedLabelIndices so the *first* touch is what triggers it, not
+    // every subsequent micro-bounce while it settles.
+    function handleFloorCollision(event: Matter.IEventCollision<Matter.Engine>) {
+      if (!gravityEngaged) return;
+      const notGround: (Matter.Body | null)[] = [cursorBody, topWall, leftWall, rightWall];
+      for (const pair of event.pairs) {
+        if (notGround.includes(pair.bodyA) || notGround.includes(pair.bodyB)) continue;
+        for (const candidate of [pair.bodyA, pair.bodyB]) {
+          const index = bodies.indexOf(candidate);
+          if (index < 0 || !labelElements[index] || landedLabelIndices.has(index)) continue;
+          landedLabelIndices.add(index);
+          const label = labelElements[index]!;
+          label.style.transitionDuration = `${LABEL_REVEAL_MS}ms`;
+          label.style.opacity = "1";
+        }
+      }
+    }
+    Events.on(engine, "collisionStart", handleFloorCollision);
+
     // The cursor is a real physics body — heavy relative to the shapes, and
     // manually driven to the mouse's *document* position every frame
     // (rather than left to the engine's own integration) so it always
@@ -915,9 +966,19 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
         elements[hoveredIndex].style.filter = "";
         hoveredIndex = -1;
       }
-      // Labels only make sense once their shape is actually clickable.
-      for (const label of labelElements) {
-        if (label) label.style.opacity = enabled ? "1" : "0";
+      // Labels don't fade in just because gravity turned on (see the
+      // collisionStart listener below for when they actually do) — but
+      // they do need to disappear immediately on disengage, and forget
+      // that they'd already landed, so scrolling down again replays the
+      // same reveal rather than the label just being there from the start.
+      if (!enabled) {
+        for (let i = 0; i < labelElements.length; i++) {
+          const label = labelElements[i];
+          if (!label) continue;
+          label.style.transitionDuration = `${LABEL_HIDE_MS}ms`;
+          label.style.opacity = "0";
+        }
+        landedLabelIndices.clear();
       }
     }
 
@@ -1079,7 +1140,10 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       // A glowing UI panel would read as a bug, not a feature, and the
       // label's job is done the instant it's actually been clicked.
       if (glowElements[index]) glowElements[index]!.style.display = "none";
-      if (labelElements[index]) labelElements[index]!.style.opacity = "0";
+      if (labelElements[index]) {
+        labelElements[index]!.style.transitionDuration = `${LABEL_HIDE_MS}ms`;
+        labelElements[index]!.style.opacity = "0";
+      }
 
       panelState = { index, spec, rectEl, originX: x, originY: y, originHw: hw, originHh: hh, hw, hh, x, y };
 
@@ -1109,8 +1173,13 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
         elements[ps.index].replaceChildren(createShapeElement(ps.spec));
         if (glowElements[ps.index]) glowElements[ps.index]!.style.display = "";
         // Still settled at this point (gravityEngaged never toggled off
-        // during an expand/shrink), so it's fine to just show it again.
-        if (labelElements[ps.index]) labelElements[ps.index]!.style.opacity = "1";
+        // during an expand/shrink) and it already played its landing
+        // reveal well before it was ever clicked, so just show it again
+        // quickly rather than replaying the slow version.
+        if (labelElements[ps.index]) {
+          labelElements[ps.index]!.style.transitionDuration = `${LABEL_HIDE_MS}ms`;
+          labelElements[ps.index]!.style.opacity = "1";
+        }
         panelState = null;
       });
     }
@@ -1282,6 +1351,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       document.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("wheel", handleWheel);
+      Events.off(engine, "collisionStart", handleFloorCollision);
       Composite.clear(engine.world, false);
       Engine.clear(engine);
       defs.remove();
