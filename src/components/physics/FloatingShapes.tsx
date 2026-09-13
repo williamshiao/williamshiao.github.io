@@ -43,15 +43,22 @@ import {
  * restarts immediately instead of shapes just sitting wherever gravity
  * left them.
  *
- * Clicking the one shape tagged with a `pageId` (see ./shapes) once
- * settled grows it in place — via Body.scale + Body.setPosition each
- * frame, so it's a real collider the whole time and physically shoves
- * every other shape out of the way as it expands — into a big rounded
- * panel parked at the center of the viewport, at which point the caller
- * (see onOpenPanel) renders that page's real content on top of it.
- * Clicking outside the panel reverses the animation and swaps the body
- * back to its original shape/size, dropping it back into normal gravity
- * like anything else.
+ * Clicking the one shape tagged with a `pageId` (see ./shapes — always
+ * forced to `kind: "rect"`, so growing it never has to visibly snap from
+ * round/triangular to rectangular the instant it starts) once settled
+ * grows it in place — via Body.scale + Body.setPosition each frame, so
+ * it's a real collider the whole time and physically shoves every other
+ * shape out of the way as it expands — into a big rounded panel parked
+ * at the center of the viewport, at which point the caller (see
+ * onOpenPanel) renders that page's real content on top of it. Clicking
+ * outside the panel reverses the animation and swaps the body back to
+ * its original shape/size, dropping it back into normal gravity like
+ * anything else. Its label (see createLabelElement) fades in once
+ * settled — labeling something before it's actually clickable would be
+ * more confusing than not labeling it at all — and the system cursor
+ * turns into a pointer over anything that really does something on
+ * click (a pageId shape, the switch, the glow button), not just
+ * anything that merely darkens on hover.
  *
  * A second special shape — a small rocker-switch rectangle (see
  * makeLightSwitchShape) — toggles the site's night mode on click: flips
@@ -287,6 +294,45 @@ function createGlowElement(spec: ShapeSpec, filterId: string): SVGGElement {
   return g;
 }
 
+/** Whether hovering this shape should turn the cursor into a pointer —
+ * i.e. whether clicking it actually does something, not just "eligible
+ * for hover darken" (every big shape is that, see ShapeSpec.interactive,
+ * even the ones with no real page yet). */
+function isClickableSpec(spec: ShapeSpec): boolean {
+  return Boolean(spec.pageId) || spec.kind === "switch" || spec.kind === "glow-button";
+}
+
+/** A label for a clickable "page" shape (see ShapeSpec.label) — white
+ * text with a dark outline (paint-order stroke, not just a fill) so it
+ * stays legible over any of the site's randomized shape colors, not just
+ * the ones it happens to contrast with. Starts invisible: FloatingShapes
+ * fades it in once the shape is actually clickable (settled) rather than
+ * labeling something that can't be clicked yet. Returns null for any
+ * shape without a label, so callers can push the result straight into
+ * their parallel array without a separate branch. */
+function createLabelElement(spec: ShapeSpec): SVGGElement | null {
+  if (!spec.label) return null;
+  const ns = "http://www.w3.org/2000/svg";
+  const g = document.createElementNS(ns, "g") as SVGGElement;
+  g.setAttribute("aria-hidden", "true");
+  g.style.opacity = "0";
+  g.style.transition = "opacity 0.3s ease";
+  const text = document.createElementNS(ns, "text");
+  text.setAttribute("text-anchor", "middle");
+  text.setAttribute("dominant-baseline", "central");
+  text.setAttribute("font-family", "var(--font-display)");
+  text.setAttribute("font-weight", "600");
+  text.setAttribute("font-size", String(Math.max(13, spec.size * 0.2)));
+  text.setAttribute("fill", "#ffffff");
+  text.setAttribute("stroke", "var(--color-ink)");
+  text.setAttribute("stroke-width", "3");
+  text.setAttribute("stroke-linejoin", "round");
+  text.setAttribute("paint-order", "stroke");
+  text.textContent = spec.label;
+  g.appendChild(text);
+  return g;
+}
+
 interface FloatingShapesProps {
   /** Called once a clicked shape finishes expanding into its panel — the
    * caller is responsible for rendering that page's actual content on top
@@ -430,12 +476,21 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
     const shapeLayer = document.createElementNS(ns, "g");
     svg.appendChild(shapeLayer);
 
+    // Labels for clickable "page" shapes live on top of everything else,
+    // so they're never occluded by a neighboring shape drifting over them.
+    const labelLayer = document.createElementNS(ns, "g");
+    svg.appendChild(labelLayer);
+
     const bodies: Matter.Body[] = [];
     const elements: SVGGElement[] = [];
     const specs: ShapeSpec[] = [];
     // Parallel to the above; null for the switch, which skips the glow
     // entirely (see the intro comment).
     const glowElements: (SVGGElement | null)[] = [];
+    // Parallel too; non-null only for the one shape with a pageId/label
+    // (see spawnLabelFor). Faded in once settled, hidden again while its
+    // panel is open (see beginExpand/beginShrink).
+    const labelElements: (SVGGElement | null)[] = [];
 
     // Ditto gets a real rigid circle body too (see createShapeBody) so it
     // collides with everything normally, but its *visual* is a soft-body
@@ -514,6 +569,16 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       updateGlowButtonVisual();
     }
 
+    // Pushes a label (or the null placeholder) for the shape just added
+    // at the end of bodies/specs/etc — called once per spawn, from every
+    // spawn function, so labelElements always stays index-aligned with
+    // them even though only one shape currently ever has a real label.
+    function spawnLabelFor(spec: ShapeSpec) {
+      const label = createLabelElement(spec);
+      if (label) labelLayer.appendChild(label);
+      labelElements.push(label);
+    }
+
     // Adds one shape to every parallel array/the world/the SVG at once —
     // used for the initial spawn below (index i's specs/bodies/elements
     // always refer to the same shape, which the click-to-expand code
@@ -529,6 +594,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       const glow = createGlowElement(spec, spec.interactive ? "glow-blur-big" : "glow-blur-small");
       glowLayer.appendChild(glow);
       glowElements.push(glow);
+      spawnLabelFor(spec);
 
       const g = document.createElementNS(ns, "g") as SVGGElement;
       g.style.transition = "filter 0.15s ease";
@@ -548,6 +614,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       const glow = createGlowElement(spec, "glow-blur-small");
       glowLayer.appendChild(glow);
       glowElements.push(glow);
+      spawnLabelFor(spec);
 
       const g = document.createElementNS(ns, "g") as SVGGElement;
       const pathEl = document.createElementNS(ns, "path") as SVGPathElement;
@@ -582,6 +649,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       bodies.push(body);
       specs.push(spec);
       glowElements.push(null); // no glow — reads as UI chrome, not a toy
+      spawnLabelFor(spec);
       Composite.add(engine.world, body);
 
       const hw = spec.size;
@@ -670,6 +738,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       bodies.push(body);
       specs.push(spec);
       glowElements.push(null); // no glow — it's UI chrome, not a toy
+      spawnLabelFor(spec);
       Composite.add(engine.world, body);
 
       const r = spec.size;
@@ -846,6 +915,10 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
         elements[hoveredIndex].style.filter = "";
         hoveredIndex = -1;
       }
+      // Labels only make sense once their shape is actually clickable.
+      for (const label of labelElements) {
+        if (label) label.style.opacity = enabled ? "1" : "0";
+      }
     }
 
     let lastClientX = -9999;
@@ -1003,8 +1076,10 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       rectEl.setAttribute("fill", spec.color);
       rectEl.style.transition = "fill 0.35s ease";
       elements[index].replaceChildren(rectEl);
-      // A glowing UI panel would read as a bug, not a feature.
+      // A glowing UI panel would read as a bug, not a feature, and the
+      // label's job is done the instant it's actually been clicked.
       if (glowElements[index]) glowElements[index]!.style.display = "none";
+      if (labelElements[index]) labelElements[index]!.style.opacity = "0";
 
       panelState = { index, spec, rectEl, originX: x, originY: y, originHw: hw, originHh: hh, hw, hh, x, y };
 
@@ -1033,6 +1108,9 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
         replaceBodyAt(ps.index, restored);
         elements[ps.index].replaceChildren(createShapeElement(ps.spec));
         if (glowElements[ps.index]) glowElements[ps.index]!.style.display = "";
+        // Still settled at this point (gravityEngaged never toggled off
+        // during an expand/shrink), so it's fine to just show it again.
+        if (labelElements[ps.index]) labelElements[ps.index]!.style.opacity = "1";
         panelState = null;
       });
     }
@@ -1162,6 +1240,13 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
             if (newIndex >= 0) elements[newIndex].style.filter = HOVER_FILTER;
             hoveredIndex = newIndex;
           }
+          // The SVG itself is pointer-events-none (the cursor is a real
+          // physics body, not a native hover target), so the *visible*
+          // system cursor has to be set on something that actually is
+          // hit-testable — the page body underneath it all.
+          document.body.style.cursor = hitIndex >= 0 && isClickableSpec(specs[hitIndex]) ? "pointer" : "";
+        } else if (document.body.style.cursor === "pointer") {
+          document.body.style.cursor = "";
         }
       } else {
         Engine.update(engine, FRAME_MS);
@@ -1171,6 +1256,9 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
         const b = bodies[i];
         const transform = `translate(${b.position.x.toFixed(2)} ${b.position.y.toFixed(2)}) rotate(${(b.angle * (180 / Math.PI)).toFixed(2)})`;
         glowElements[i]?.setAttribute("transform", transform);
+        // Position-only, no rotation — a label should stay upright and
+        // legible even if the shape it's riding on settles at an angle.
+        labelElements[i]?.setAttribute("transform", `translate(${b.position.x.toFixed(2)} ${b.position.y.toFixed(2)})`);
         if (dittoBlob && i === dittoIndex) {
           // The blob's path/face are drawn in absolute coordinates and
           // updated directly (see stepDittoBlob) — no <g> transform here,
@@ -1199,6 +1287,8 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       defs.remove();
       glowLayer.remove();
       shapeLayer.remove();
+      labelLayer.remove();
+      if (document.body.style.cursor === "pointer") document.body.style.cursor = "";
     };
   }, []);
 

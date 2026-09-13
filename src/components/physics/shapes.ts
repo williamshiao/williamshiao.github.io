@@ -10,6 +10,10 @@
  * FloatingShapes), but keeping the flag on the shape itself now means the
  * later "click a big shape to open a page" step doesn't need to touch this
  * file again.
+ *
+ * Any shape that gets a `pageId` (see ShapeSpec) must be forced to
+ * `kind: "rect"` when it's created, and given a short `label` — see
+ * generateShapes for where that happens for the current one.
  */
 
 export type ShapeKind = "circle" | "rect" | "triangle" | "ditto" | "switch" | "glow-button";
@@ -26,8 +30,15 @@ export interface ShapeSpec {
   interactive: boolean;
   /** Set only on the one big shape that currently opens a real page (see
    * FloatingShapes' click-to-expand) — undefined means "just decorative
-   * hover feedback for now", same as any other non-interactive shape. */
+   * hover feedback for now", same as any other non-interactive shape.
+   * Always paired with `kind: "rect"` (see generateShapes) — the expand
+   * animation swaps the shape to a rectangle regardless of its original
+   * kind, so starting from one already keeps that transition seamless
+   * instead of visibly changing silhouette the instant it begins. */
   pageId?: string;
+  /** The short label FloatingShapes renders on top of a pageId shape once
+   * it's clickable — what the user is actually about to open. */
+  label?: string;
 }
 
 const KIND_WEIGHTS: { kind: ShapeKind; weight: number }[] = [
@@ -79,8 +90,8 @@ const SMALL_SIZE: SizeRange = { circle: [26, 42], rectHalf: [24, 38], triangle: 
 // just "a slightly bigger circle".
 const BIG_SIZE: SizeRange = { circle: [95, 135], rectHalf: [80, 115], triangle: [100, 140] };
 
-function makeShape(id: string, interactive: boolean, range: SizeRange): ShapeSpec {
-  const kind = pickKind();
+function makeShape(id: string, interactive: boolean, range: SizeRange, forceKind?: ShapeKind): ShapeSpec {
+  const kind = forceKind ?? pickKind();
   const color = randomColor();
   const rotation = randomBetween(-0.6, 0.6);
   if (kind === "rect") {
@@ -97,12 +108,17 @@ function makeShape(id: string, interactive: boolean, range: SizeRange): ShapeSpe
 
 export function generateShapes(smallCount: number, bigCount: number): ShapeSpec[] {
   const small = Array.from({ length: smallCount }, (_, i) => makeShape(`small-${i}`, false, SMALL_SIZE));
-  const big = Array.from({ length: bigCount }, (_, i) => makeShape(`big-${i}`, true, BIG_SIZE));
-  // Exactly one big shape currently opens a real page (Internships, as a
-  // first pass — see FloatingShapes' click-to-expand). Always the first
-  // one generated rather than picked by color, since color is randomized
-  // fresh every load and isn't a stable enough hook to key off of.
-  if (big.length > 0) big[0].pageId = "internships";
+  // The first big shape is always a rect, not randomly picked — it's the
+  // one that opens a real page (Internships, as a first pass — see
+  // FloatingShapes' click-to-expand), and forcing it to already be the
+  // same kind the expand animation turns everything into is what keeps
+  // that transition seamless rather than snapping from round/triangular
+  // to rectangular the instant it starts growing.
+  const big = Array.from({ length: bigCount }, (_, i) => makeShape(`big-${i}`, true, BIG_SIZE, i === 0 ? "rect" : undefined));
+  if (big.length > 0) {
+    big[0].pageId = "internships";
+    big[0].label = "Internships";
+  }
   // One guaranteed Ditto among the small tier, just for fun — always
   // present (not a random chance kind), always in the first small slot.
   if (small.length > 0) small[0] = makeDittoShape();
