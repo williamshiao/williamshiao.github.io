@@ -46,14 +46,22 @@ function randomBetween(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
 
-/** A random, moderately saturated color — varied hue every call, but a
- * consistent enough saturation/lightness band to read as one cohesive
- * palette rather than arbitrary noise. */
+// Hues pulled straight from the site's own pastel accents + Ditto's magenta
+// (see index.css --color-pastel-* / --color-ditto) so the shapes always
+// read as "this site's palette", not an arbitrary rainbow — a fresh mix of
+// these on every reload stays varied without ever clashing.
+const PALETTE_HUES = [338, 292, 262, 205, 152, 40];
+const HUE_JITTER = 8;
+
+/** A color drawn from the curated palette above (small hue jitter for
+ * variety) at a consistent saturation/lightness band, so any two shapes
+ * picked at random still harmonize. */
 function randomColor(): string {
-  const hue = Math.floor(randomBetween(0, 360));
-  const saturation = randomBetween(50, 72);
-  const lightness = randomBetween(28, 52);
-  return `hsl(${hue}deg ${saturation.toFixed(0)}% ${lightness.toFixed(0)}%)`;
+  const base = PALETTE_HUES[Math.floor(Math.random() * PALETTE_HUES.length)];
+  const hue = ((base + randomBetween(-HUE_JITTER, HUE_JITTER)) % 360 + 360) % 360;
+  const saturation = randomBetween(55, 70);
+  const lightness = randomBetween(32, 48);
+  return `hsl(${hue.toFixed(0)}deg ${saturation.toFixed(0)}% ${lightness.toFixed(0)}%)`;
 }
 
 interface SizeRange {

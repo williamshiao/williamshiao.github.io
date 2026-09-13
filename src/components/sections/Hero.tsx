@@ -14,16 +14,20 @@ export function Hero() {
         className="pointer-events-none absolute h-72 w-72 -translate-x-40 translate-y-24 rounded-full bg-pastel-blue/40 blur-3xl"
       />
 
-      <div className="relative">
+      {/* flex + items-center centers each line by its own box, independent of
+          the others' widths — three separate inline-block siblings here
+          previously flowed like inline content (side-by-side when they fit),
+          which is what threw the centering off. */}
+      <div className="relative flex w-full flex-col items-center">
         <p
           data-blob-target="text"
-          className="inline-block font-pixel text-xs uppercase tracking-widest text-ditto sm:text-sm"
+          className="font-pixel text-xs uppercase tracking-widest text-ditto sm:text-sm"
         >
           Software Engineer · Aspiring UI/UX Engineer
         </p>
         <h1
           data-blob-target="text"
-          className="mt-6 inline-block text-balance font-display text-7xl font-semibold tracking-tight text-ink sm:text-8xl lg:text-9xl"
+          className="mt-6 text-balance text-center font-display text-7xl font-semibold tracking-tight text-ink sm:text-8xl lg:text-9xl"
         >
           William Shiao
         </h1>

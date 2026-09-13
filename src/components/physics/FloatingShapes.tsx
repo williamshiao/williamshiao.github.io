@@ -179,10 +179,14 @@ export function FloatingShapes() {
       snapFloorToTarget();
     }
 
+    // The current viewport's bottom edge is always a solid floor — not just
+    // once gravity engages — so zero-g shapes can never drift down past
+    // what's actually on screen and go missing until you scroll to find
+    // them. Still clamped to the plate's real bottom so it never floats
+    // below the habitat itself near the very end of the page.
     function floorTargetBottom(): number {
       const plate = getDocRect(PLATE_SELECTOR);
       const plateBottom = plate ? plate.bottom : window.scrollY + window.innerHeight;
-      if (!gravityEngaged) return plateBottom;
       return Math.min(window.scrollY + window.innerHeight - FLOOR_MARGIN, plateBottom);
     }
 
