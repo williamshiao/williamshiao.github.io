@@ -9,6 +9,7 @@ import {
   DITTO_BODY_HALF_EXTENT_RATIO,
   type DittoBlobState,
 } from "./dittoBlob";
+import { STRINGS, type Lang } from "../../i18n/strings";
 
 /**
  * A physics playground spanning one continuous, seamless plate (see
@@ -86,6 +87,15 @@ import {
  * spawnGlowButton) — toggles that whole glow layer on/off, the same
  * click path as the switch and the pageId panel.
  *
+ * Three more: an envelope and a `</>` code badge (see
+ * makeContactEmailShape/makeContactCodeShape) open a mailto: link and a
+ * GitHub profile respectively, and a little globe (see
+ * makeLanguageToggleShape/toggleLanguage) flips the site's language —
+ * FloatingShapes owns reading/writing that choice (localStorage, same as
+ * night mode/glow) and just reports the new value up via
+ * onToggleLanguage so LanguageProvider (see context/LanguageContext.tsx),
+ * which owns the actual translated copy, knows to re-render.
+ *
  * Matter.js (MIT) rather than custom code: rigid-body elastic collision
  * among several bodies is its home turf. Position/size/color are generated
  * fresh every load (see ./shapes) rather than fixed.
@@ -97,7 +107,10 @@ const PLATE_SELECTOR = "[data-plate-bounds]";
 // Fewer small shapes than before — with a dozen of them bouncing around in
 // a confined space, collisions kept handing velocity back and forth and
 // the whole board read as too fast/chaotic even at the same base speed.
-const SMALL_SHAPE_COUNT = 7;
+// 6 of these slots are always the same fixed UI shapes (ditto, switch,
+// glow button, the two contact shapes, language) — see generateShapes —
+// leaving 3 genuinely random/decorative ones.
+const SMALL_SHAPE_COUNT = 9;
 const BIG_SHAPE_COUNT = 5;
 const WALL_THICKNESS = 100; // generous, so fast bodies can't tunnel through on one big step
 const CURSOR_RADIUS = 14;
@@ -207,7 +220,7 @@ function createShapeBody(spec: ShapeSpec, x: number, y: number): Matter.Body {
     frictionStatic: 0,
     angle: spec.rotation ?? 0,
   };
-  if (spec.kind === "circle" || spec.kind === "glow-button") {
+  if (spec.kind === "circle" || spec.kind === "glow-button" || spec.kind === "language-toggle") {
     return Bodies.circle(x, y, spec.size, common);
   }
   if (spec.kind === "ditto") {
@@ -217,7 +230,7 @@ function createShapeBody(spec: ShapeSpec, x: number, y: number): Matter.Body {
     const half = spec.size * DITTO_BODY_HALF_EXTENT_RATIO;
     return Bodies.rectangle(x, y, half * 2, half * 2, { ...common, chamfer: { radius: half * 0.3 } });
   }
-  if (spec.kind === "switch" || spec.kind === "rect") {
+  if (spec.kind === "switch" || spec.kind === "rect" || spec.kind === "contact-email" || spec.kind === "contact-code") {
     return Bodies.rectangle(x, y, spec.size * 2, (spec.size2 ?? spec.size) * 2, {
       ...common,
       chamfer: { radius: Math.min(spec.size, spec.size2 ?? spec.size) * 0.35 },
@@ -309,7 +322,7 @@ function createGlowElement(spec: ShapeSpec, filterId: string): SVGGElement {
  * for hover darken" (every big shape is that, see ShapeSpec.interactive,
  * even the ones with no real page yet). */
 function isClickableSpec(spec: ShapeSpec): boolean {
-  return Boolean(spec.pageId) || spec.kind === "switch" || spec.kind === "glow-button";
+  return Boolean(spec.pageId) || Boolean(spec.hasClickAction);
 }
 
 /** A label for a clickable "page" shape (see ShapeSpec.label) — white
@@ -360,9 +373,14 @@ interface FloatingShapesProps {
    * shrink animation finishes, so the caller can hide its content overlay
    * right away rather than waiting on the physics. */
   onClosePanel?: () => void;
+  /** Called the instant the language-toggle shape is clicked, with the
+   * *new* language — FloatingShapes owns reading/writing the localStorage
+   * key itself (see toggleLanguage), this just tells the rest of the app
+   * (LanguageProvider) to re-render with the new copy. */
+  onToggleLanguage?: (lang: Lang) => void;
 }
 
-export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProps) {
+export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: FloatingShapesProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   // Refs rather than effect deps: the physics world below is built exactly
   // once (see the `[]` dependency array), and re-running all of that just
@@ -370,10 +388,12 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
   // respawn every shape.
   const onOpenPanelRef = useRef(onOpenPanel);
   const onClosePanelRef = useRef(onClosePanel);
+  const onToggleLanguageRef = useRef(onToggleLanguage);
   useEffect(() => {
     onOpenPanelRef.current = onOpenPanel;
     onClosePanelRef.current = onClosePanel;
-  }, [onOpenPanel, onClosePanel]);
+    onToggleLanguageRef.current = onToggleLanguage;
+  }, [onOpenPanel, onClosePanel, onToggleLanguage]);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -590,6 +610,50 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
         // Private browsing/storage disabled — same as night mode above.
       }
       updateGlowButtonVisual();
+    }
+
+    // Language, toggled by the globe shape (see spawnLanguageToggle).
+    // FloatingShapes owns reading/writing localStorage itself here (same
+    // as night mode/glow), and just reports the new value upward
+    // (onToggleLanguage) so the rest of the app — which owns the actual
+    // translated copy — knows to re-render.
+    let currentLang: Lang = (() => {
+      try {
+        return localStorage.getItem("ditto-lang") === "fr" ? "fr" : "en";
+      } catch {
+        return "en";
+      }
+    })();
+    let languageToggle: { textEl: SVGTextElement } | null = null;
+
+    function updateLanguageVisual() {
+      if (!languageToggle) return;
+      languageToggle.textEl.textContent = currentLang.toUpperCase();
+    }
+
+    // Only the Internships shape has a translatable label right now, so
+    // this is a small hardcoded lookup rather than threading a labelKey
+    // through ShapeSpec for just one entry — revisit if a second page
+    // shows up.
+    function pageLabelKeyFor(pageId: string): "internshipsLabel" | null {
+      return pageId === "internships" ? "internshipsLabel" : null;
+    }
+
+    function toggleLanguage() {
+      currentLang = currentLang === "en" ? "fr" : "en";
+      try {
+        localStorage.setItem("ditto-lang", currentLang);
+      } catch {
+        // Private browsing/storage disabled — same as night mode above.
+      }
+      updateLanguageVisual();
+      for (let i = 0; i < specs.length; i++) {
+        const key = specs[i].pageId ? pageLabelKeyFor(specs[i].pageId!) : null;
+        if (!key) continue;
+        const textEl = labelElements[i]?.querySelector("text");
+        if (textEl) textEl.textContent = STRINGS[currentLang][key];
+      }
+      onToggleLanguageRef.current?.(currentLang);
     }
 
     // Pushes a label (or the null placeholder) for the shape just added
@@ -874,6 +938,186 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       updateGlowButtonVisual();
     }
 
+    // An envelope — opens the visitor's mail client via a plain mailto:
+    // href (see handlePointerDown), nothing sent automatically. Same
+    // stencil-family treatment as the switch/bulb/glow button.
+    function spawnContactEmail(spec: ShapeSpec, x: number, y: number, vx: number, vy: number) {
+      const body = createShapeBody(spec, x, y);
+      Body.setVelocity(body, { x: vx, y: vy });
+      Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.04);
+      bodies.push(body);
+      specs.push(spec);
+      glowElements.push(null); // no glow — it's UI chrome, not a toy
+      spawnLabelFor(spec); // null — this shape has no pageId/label
+      Composite.add(engine.world, body);
+
+      const hw = spec.size;
+      const hh = spec.size2 ?? spec.size;
+      const line = "var(--color-ink)";
+      const strokeWidth = Math.max(1.3, hw * 0.09);
+
+      const g = document.createElementNS(ns, "g") as SVGGElement;
+      g.style.transition = "filter 0.15s ease";
+
+      const bodyRect = document.createElementNS(ns, "rect");
+      bodyRect.setAttribute("x", String(-hw));
+      bodyRect.setAttribute("y", String(-hh));
+      bodyRect.setAttribute("width", String(hw * 2));
+      bodyRect.setAttribute("height", String(hh * 2));
+      bodyRect.setAttribute("rx", String(hw * 0.16));
+      bodyRect.setAttribute("fill", spec.color);
+      bodyRect.setAttribute("stroke", line);
+      bodyRect.setAttribute("stroke-width", String(strokeWidth));
+      g.appendChild(bodyRect);
+
+      // The flap: two lines from the top corners meeting near center —
+      // that's all it takes to read as an envelope.
+      const flap = document.createElementNS(ns, "path");
+      flap.setAttribute(
+        "d",
+        `M ${(-hw * 0.8).toFixed(2)} ${(-hh * 0.62).toFixed(2)} L 0 ${(hh * 0.12).toFixed(2)} L ${(hw * 0.8).toFixed(2)} ${(-hh * 0.62).toFixed(2)}`,
+      );
+      flap.setAttribute("fill", "none");
+      flap.setAttribute("stroke", line);
+      flap.setAttribute("stroke-width", String(strokeWidth * 0.85));
+      flap.setAttribute("stroke-linejoin", "round");
+      flap.setAttribute("stroke-linecap", "round");
+      g.appendChild(flap);
+
+      shapeLayer.appendChild(g);
+      elements.push(g);
+    }
+
+    // A generic `</>` code badge — opens a GitHub (or similar) profile in
+    // a new tab (see handlePointerDown). Deliberately not a redrawn
+    // GitHub logo — that's a registered mark — a plain brackets glyph
+    // says "see my code" just as clearly.
+    function spawnContactCode(spec: ShapeSpec, x: number, y: number, vx: number, vy: number) {
+      const body = createShapeBody(spec, x, y);
+      Body.setVelocity(body, { x: vx, y: vy });
+      Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.04);
+      bodies.push(body);
+      specs.push(spec);
+      glowElements.push(null);
+      spawnLabelFor(spec);
+      Composite.add(engine.world, body);
+
+      const r = spec.size;
+      const line = "var(--color-ink)";
+      const strokeWidth = Math.max(1.3, r * 0.09);
+
+      const g = document.createElementNS(ns, "g") as SVGGElement;
+      g.style.transition = "filter 0.15s ease";
+
+      const plate = document.createElementNS(ns, "rect");
+      plate.setAttribute("x", String(-r));
+      plate.setAttribute("y", String(-r));
+      plate.setAttribute("width", String(r * 2));
+      plate.setAttribute("height", String(r * 2));
+      plate.setAttribute("rx", String(r * 0.22));
+      plate.setAttribute("fill", spec.color);
+      plate.setAttribute("stroke", line);
+      plate.setAttribute("stroke-width", String(strokeWidth));
+      g.appendChild(plate);
+
+      const left = document.createElementNS(ns, "path");
+      left.setAttribute("d", `M ${(-r * 0.16).toFixed(2)} ${(-r * 0.34).toFixed(2)} L ${(-r * 0.42).toFixed(2)} 0 L ${(-r * 0.16).toFixed(2)} ${(r * 0.34).toFixed(2)}`);
+      left.setAttribute("fill", "none");
+      left.setAttribute("stroke", line);
+      left.setAttribute("stroke-width", String(strokeWidth * 0.9));
+      left.setAttribute("stroke-linecap", "round");
+      left.setAttribute("stroke-linejoin", "round");
+      g.appendChild(left);
+
+      const right = document.createElementNS(ns, "path");
+      right.setAttribute("d", `M ${(r * 0.16).toFixed(2)} ${(-r * 0.34).toFixed(2)} L ${(r * 0.42).toFixed(2)} 0 L ${(r * 0.16).toFixed(2)} ${(r * 0.34).toFixed(2)}`);
+      right.setAttribute("fill", "none");
+      right.setAttribute("stroke", line);
+      right.setAttribute("stroke-width", String(strokeWidth * 0.9));
+      right.setAttribute("stroke-linecap", "round");
+      right.setAttribute("stroke-linejoin", "round");
+      g.appendChild(right);
+
+      const slash = document.createElementNS(ns, "line");
+      slash.setAttribute("x1", String(r * 0.06));
+      slash.setAttribute("y1", String(r * 0.3));
+      slash.setAttribute("x2", String(-r * 0.06));
+      slash.setAttribute("y2", String(-r * 0.3));
+      slash.setAttribute("stroke", line);
+      slash.setAttribute("stroke-width", String(strokeWidth * 0.7));
+      slash.setAttribute("stroke-linecap", "round");
+      g.appendChild(slash);
+
+      shapeLayer.appendChild(g);
+      elements.push(g);
+    }
+
+    // A little globe — toggles the site's language on click (see
+    // toggleLanguage) and shows the *current* language as a short code
+    // rendered right on the icon, the same way the switch/bulb show
+    // their own state.
+    function spawnLanguageToggle(spec: ShapeSpec, x: number, y: number, vx: number, vy: number) {
+      const body = createShapeBody(spec, x, y);
+      Body.setVelocity(body, { x: vx, y: vy });
+      Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.04);
+      bodies.push(body);
+      specs.push(spec);
+      glowElements.push(null);
+      spawnLabelFor(spec);
+      Composite.add(engine.world, body);
+
+      const r = spec.size;
+      const line = "var(--color-ink)";
+      const strokeWidth = Math.max(1.3, r * 0.08);
+
+      const g = document.createElementNS(ns, "g") as SVGGElement;
+      g.style.transition = "filter 0.15s ease";
+
+      const globeEl = document.createElementNS(ns, "circle");
+      globeEl.setAttribute("r", String(r));
+      globeEl.setAttribute("fill", spec.color);
+      globeEl.setAttribute("stroke", line);
+      globeEl.setAttribute("stroke-width", String(strokeWidth));
+      g.appendChild(globeEl);
+
+      const meridian = document.createElementNS(ns, "ellipse");
+      meridian.setAttribute("rx", String(r * 0.42));
+      meridian.setAttribute("ry", String(r));
+      meridian.setAttribute("fill", "none");
+      meridian.setAttribute("stroke", line);
+      meridian.setAttribute("stroke-width", String(strokeWidth * 0.7));
+      g.appendChild(meridian);
+
+      const equator = document.createElementNS(ns, "line");
+      equator.setAttribute("x1", String(-r));
+      equator.setAttribute("y1", "0");
+      equator.setAttribute("x2", String(r));
+      equator.setAttribute("y2", "0");
+      equator.setAttribute("stroke", line);
+      equator.setAttribute("stroke-width", String(strokeWidth * 0.7));
+      g.appendChild(equator);
+
+      // Same "white fill, dark outline" treatment as the page labels, so
+      // the language code reads clearly against the shape's own color.
+      const textEl = document.createElementNS(ns, "text") as SVGTextElement;
+      textEl.setAttribute("text-anchor", "middle");
+      textEl.setAttribute("dominant-baseline", "central");
+      textEl.setAttribute("font-family", "var(--font-display)");
+      textEl.setAttribute("font-weight", "700");
+      textEl.setAttribute("font-size", String(r * 0.42));
+      textEl.setAttribute("fill", "#ffffff");
+      textEl.setAttribute("stroke", line);
+      textEl.setAttribute("stroke-width", "2.2");
+      textEl.setAttribute("paint-order", "stroke");
+      g.appendChild(textEl);
+
+      shapeLayer.appendChild(g);
+      elements.push(g);
+
+      languageToggle = { textEl };
+      updateLanguageVisual();
+    }
+
     shapes.forEach((spec, i) => {
       const cx = plateRect ? plateRect.left + plateRect.width / 2 : window.innerWidth / 2;
       const cy = plateRect ? plateRect.top + window.innerHeight / 2 : window.innerHeight / 2;
@@ -892,6 +1136,12 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
         spawnLightSwitch(spec, x, y, vx, vy);
       } else if (spec.kind === "glow-button") {
         spawnGlowButton(spec, x, y, vx, vy);
+      } else if (spec.kind === "contact-email") {
+        spawnContactEmail(spec, x, y, vx, vy);
+      } else if (spec.kind === "contact-code") {
+        spawnContactCode(spec, x, y, vx, vy);
+      } else if (spec.kind === "language-toggle") {
+        spawnLanguageToggle(spec, x, y, vx, vy);
       } else {
         spawnShape(spec, x, y, vx, vy);
       }
@@ -1198,12 +1448,21 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       const hits = Query.point(bodies, { x: docX, y: docY });
       const hitIndex = hits.length > 0 ? bodies.indexOf(hits[0]) : -1;
       if (hitIndex < 0) return;
-      if (specs[hitIndex].pageId) {
+      const hitSpec = specs[hitIndex];
+      if (hitSpec.pageId) {
         beginExpand(hitIndex);
-      } else if (specs[hitIndex].kind === "switch") {
+      } else if (hitSpec.kind === "switch") {
         toggleNightMode();
-      } else if (specs[hitIndex].kind === "glow-button") {
+      } else if (hitSpec.kind === "glow-button") {
         toggleGlow();
+      } else if (hitSpec.kind === "language-toggle") {
+        toggleLanguage();
+      } else if (hitSpec.kind === "contact-email" && hitSpec.href) {
+        // A plain mailto: link — opens the visitor's own mail client with
+        // the address pre-filled; nothing is sent automatically.
+        window.location.href = hitSpec.href;
+      } else if (hitSpec.kind === "contact-code" && hitSpec.href) {
+        window.open(hitSpec.href, "_blank", "noopener,noreferrer");
       }
     }
     document.addEventListener("pointerdown", handlePointerDown);

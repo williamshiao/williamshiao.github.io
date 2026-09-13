@@ -4,6 +4,7 @@ import { Footer } from "./components/layout/Footer";
 import { Hero } from "./components/sections/Hero";
 import { Internships } from "./components/sections/Internships";
 import { FloatingShapes } from "./components/physics/FloatingShapes";
+import { useLanguage } from "./context/LanguageContext";
 
 interface OpenPanel {
   pageId: string;
@@ -18,8 +19,15 @@ interface OpenPanel {
 // FloatingShapes for the rest of the physics (zero-g at the top, gravity
 // engages once scrolled down far enough, and the floor then tracks the
 // current viewport bottom so settled shapes are never scrolled out of view).
+//
+// Language is owned up in LanguageProvider (see main.tsx), not here — the
+// language-toggle shape reads/writes the same localStorage key on its own
+// and just reports forward (onToggleLanguage) when it flips, the same
+// pattern the panel/night-mode/glow shapes already use for the things
+// *they* own.
 function App() {
   const [openPanel, setOpenPanel] = useState<OpenPanel | null>(null);
+  const { t, setLang } = useLanguage();
 
   return (
     <div className="relative w-full bg-canvas">
@@ -31,10 +39,10 @@ function App() {
         </div>
 
         <div className="pointer-events-none absolute inset-x-4 top-[100dvh] z-10 flex h-dvh flex-col items-center pt-16 text-center sm:inset-x-10 sm:pt-24">
-          <p className="font-pixel text-xs uppercase tracking-widest text-ditto sm:text-sm">Coming down to land</p>
+          <p className="font-pixel text-xs uppercase tracking-widest text-ditto sm:text-sm">{t("comingDownToLand")}</p>
           <h2 className="mt-4 font-display text-3xl font-semibold text-ink sm:text-4xl">
             {/* TODO(content): once every shape has a real page, replace this placeholder. */}
-            Soon, these become the site
+            {t("soonSite")}
           </h2>
         </div>
       </div>
@@ -42,6 +50,7 @@ function App() {
       <FloatingShapes
         onOpenPanel={(pageId, accentColor) => setOpenPanel({ pageId, accentColor })}
         onClosePanel={() => setOpenPanel(null)}
+        onToggleLanguage={setLang}
       />
       <Footer />
 
@@ -61,7 +70,7 @@ function App() {
           >
             {openPanel.pageId === "internships" && (
               <>
-                <h2 className="font-display text-2xl font-semibold text-ink sm:text-3xl">Internships</h2>
+                <h2 className="font-display text-2xl font-semibold text-ink sm:text-3xl">{t("internshipsTitle")}</h2>
                 <div className="mt-8">
                   <Internships />
                 </div>

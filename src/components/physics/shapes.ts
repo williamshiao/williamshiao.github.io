@@ -16,7 +16,16 @@
  * generateShapes for where that happens for the current one.
  */
 
-export type ShapeKind = "circle" | "rect" | "triangle" | "ditto" | "switch" | "glow-button";
+export type ShapeKind =
+  | "circle"
+  | "rect"
+  | "triangle"
+  | "ditto"
+  | "switch"
+  | "glow-button"
+  | "contact-email"
+  | "contact-code"
+  | "language-toggle";
 
 export interface ShapeSpec {
   id: string;
@@ -39,6 +48,15 @@ export interface ShapeSpec {
   /** The short label FloatingShapes renders on top of a pageId shape once
    * it's clickable — what the user is actually about to open. */
   label?: string;
+  /** True for any shape whose click does something real (open a page,
+   * flip a setting, follow a link) — as opposed to `interactive`, which
+   * just means "eligible for hover darken" and is true for every big
+   * shape whether or not it has a real destination yet. Drives the
+   * pointer-cursor affordance in FloatingShapes (see isClickableSpec). */
+  hasClickAction?: boolean;
+  /** Destination for the two contact shapes (see makeContactEmailShape/
+   * makeContactCodeShape) — a mailto: link or a profile URL. */
+  href?: string;
 }
 
 const KIND_WEIGHTS: { kind: ShapeKind; weight: number }[] = [
@@ -127,6 +145,12 @@ export function generateShapes(smallCount: number, bigCount: number): ShapeSpec[
   if (small.length > 1) small[1] = makeLightSwitchShape();
   // And a push-button that toggles the shape glow effect, in the third.
   if (small.length > 2) small[2] = makeGlowButtonShape();
+  // Contact shapes — an envelope (email) and a code-brackets badge
+  // (GitHub/portfolio code) — in the fourth and fifth slots.
+  if (small.length > 3) small[3] = makeContactEmailShape();
+  if (small.length > 4) small[4] = makeContactCodeShape();
+  // And the language toggle, in the sixth.
+  if (small.length > 5) small[5] = makeLanguageToggleShape();
   return [...small, ...big];
 }
 
@@ -153,7 +177,15 @@ export function makeDittoShape(): ShapeSpec {
  * matches the site's *current* surface tone, light or dark.
  */
 export function makeLightSwitchShape(): ShapeSpec {
-  return { id: "light-switch", kind: "switch", color: "var(--color-surface)", size: 24, size2: 28, interactive: true };
+  return {
+    id: "light-switch",
+    kind: "switch",
+    color: "var(--color-surface)",
+    size: 24,
+    size2: 28,
+    interactive: true,
+    hasClickAction: true,
+  };
 }
 
 /**
@@ -165,5 +197,71 @@ export function makeLightSwitchShape(): ShapeSpec {
  * base's CSS-var fill, always matching the site's current surface tone.
  */
 export function makeGlowButtonShape(): ShapeSpec {
-  return { id: "glow-button", kind: "glow-button", color: "var(--color-surface)", size: 24, interactive: true };
+  return {
+    id: "glow-button",
+    kind: "glow-button",
+    color: "var(--color-surface)",
+    size: 24,
+    interactive: true,
+    hasClickAction: true,
+  };
+}
+
+// TODO(content): replace with your real email address.
+const CONTACT_EMAIL = "hello@williamshiao.dev";
+// TODO(content): replace with your real GitHub (or preferred code host) profile URL.
+const GITHUB_URL = "https://github.com/your-username";
+
+/**
+ * An envelope — opens the visitor's mail client with your address already
+ * filled in (see FloatingShapes' click handler: a plain `mailto:` href,
+ * nothing sent automatically). Same "always present, fixed size, stencil
+ * icon" treatment as the switch/bulb.
+ */
+export function makeContactEmailShape(): ShapeSpec {
+  return {
+    id: "contact-email",
+    kind: "contact-email",
+    color: "var(--color-surface)",
+    size: 22,
+    size2: 26,
+    interactive: true,
+    hasClickAction: true,
+    href: `mailto:${CONTACT_EMAIL}`,
+  };
+}
+
+/**
+ * A generic `</>` code badge — opens your GitHub profile in a new tab.
+ * Deliberately not a redrawn GitHub logo (that's a registered mark); a
+ * plain code-brackets glyph says "see my code" just as clearly without
+ * reproducing anyone's trademark.
+ */
+export function makeContactCodeShape(): ShapeSpec {
+  return {
+    id: "contact-code",
+    kind: "contact-code",
+    color: "var(--color-surface)",
+    size: 24,
+    interactive: true,
+    hasClickAction: true,
+    href: GITHUB_URL,
+  };
+}
+
+/**
+ * A little globe that toggles the site's language (see FloatingShapes'
+ * toggleLanguage/LanguageContext) — shows the *current* language as a
+ * short code (EN/FR) rendered directly on the icon, the same way the
+ * switch/bulb show their own on/off state.
+ */
+export function makeLanguageToggleShape(): ShapeSpec {
+  return {
+    id: "language-toggle",
+    kind: "language-toggle",
+    color: "var(--color-surface)",
+    size: 24,
+    interactive: true,
+    hasClickAction: true,
+  };
 }

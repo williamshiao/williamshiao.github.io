@@ -1,7 +1,11 @@
-// TODO(content): placeholder bio — replace with real copy once drafted.
+import { useLanguage } from "../../context/LanguageContext";
+
+// TODO(content): placeholder bio — replace with real copy once drafted
+// (in both languages together — see i18n/strings.ts).
 // This is the terrarium's resting/home state — the first thing a visitor
 // sees, so it carries far more visual weight than anything in the tab panels.
 export function Hero() {
+  const { t } = useLanguage();
   return (
     <div className="absolute inset-4 z-10 flex flex-col items-center justify-center overflow-hidden px-6 text-center sm:inset-10">
       {/* Soft color-glow accents — the only decoration on an otherwise plain-type hero. */}
@@ -23,7 +27,7 @@ export function Hero() {
           data-blob-target="text"
           className="font-pixel text-xs uppercase tracking-widest text-ditto sm:text-sm"
         >
-          Software Engineer · Aspiring UI/UX Engineer
+          {t("heroTagline")}
         </p>
         <h1
           data-blob-target="text"
@@ -31,11 +35,7 @@ export function Hero() {
         >
           William Shiao
         </h1>
-        <p className="mx-auto mt-8 max-w-xl text-balance text-lg text-ink-soft sm:text-xl">
-          A software engineering graduate currently studying usability and UX at
-          Polytechnique Montréal — building things that are both technically solid and
-          genuinely pleasant to use.
-        </p>
+        <p className="mx-auto mt-8 max-w-xl text-balance text-lg text-ink-soft sm:text-xl">{t("heroBio")}</p>
         {/* TODO(content): expand bio further, add a contact/CTA line once decided. */}
       </div>
     </div>
