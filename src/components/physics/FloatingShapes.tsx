@@ -162,6 +162,11 @@ const HOVER_FILTER = "brightness(0.72)";
 // opacity change on it (hiding again, expand/shrink) stays snappy.
 const LABEL_REVEAL_MS = 1400;
 const LABEL_HIDE_MS = 200;
+// How long after landing the one shape with a real page behind it (see
+// handleFloorCollision) waits before opening on its own — long enough for
+// its label to finish fading in first, so the beat reads as "falls, lands,
+// label lights up, *then* blooms open" rather than everything at once.
+const AUTO_EXPAND_DELAY_MS = 1800;
 
 // Every shape's soft color glow — see the intro comment for how the
 // overlap-blending actually works. Modeled on the Hero's own background
@@ -620,6 +625,11 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
     // during the *current* fall — cleared on every disengage so the same
     // dramatic beat replays each time it scrolls down and lands again.
     const landedLabelIndices = new Set<number>();
+    // Pending auto-open of the one shape that lands with a real page behind
+    // it (see handleFloorCollision) — tracked so scrolling back up before it
+    // fires can cancel it instead of popping the panel open after the user's
+    // already left.
+    let autoExpandTimer: ReturnType<typeof setTimeout> | null = null;
 
     // Ditto gets a real rigid circle body too (see createShapeBody) so it
     // collides with everything normally, but its *visual* is a soft-body
@@ -1305,6 +1315,18 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
           const label = labelElements[index]!;
           label.style.transitionDuration = `${LABEL_REVEAL_MS}ms`;
           label.style.opacity = "1";
+
+          // The one shape with a real page behind it opens itself, a beat
+          // after landing — see AUTO_EXPAND_DELAY_MS. This is the site
+          // demonstrating its own "click a shape, it opens a page" trick
+          // rather than waiting for a visitor to discover it — see the
+          // FloatingShapes intro comment.
+          if (specs[index].pageId && !autoExpandTimer) {
+            autoExpandTimer = setTimeout(() => {
+              autoExpandTimer = null;
+              if (gravityEngaged && !panelState && !transitioning) beginExpand(index);
+            }, AUTO_EXPAND_DELAY_MS);
+          }
         }
       }
     }
@@ -1364,6 +1386,13 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
           label.style.opacity = "0";
         }
         landedLabelIndices.clear();
+        // Scrolling back up before the auto-open beat fires (see
+        // handleFloorCollision) cancels it — it should never pop the panel
+        // open once the shape's already been launched back into zero-g.
+        if (autoExpandTimer) {
+          clearTimeout(autoExpandTimer);
+          autoExpandTimer = null;
+        }
       }
     }
 
@@ -1495,6 +1524,13 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       if (panelState || transitioning) return;
       const spec = specs[index];
       if (!spec.pageId) return;
+      // A manual click beats the auto-open beat (see handleFloorCollision)
+      // — without this, closing a manually-opened panel just before that
+      // timer fires would have it pop back open on its own right after.
+      if (autoExpandTimer) {
+        clearTimeout(autoExpandTimer);
+        autoExpandTimer = null;
+      }
       if (hoveredIndex === index) {
         elements[index].style.filter = "";
         hoveredIndex = -1;
@@ -1744,6 +1780,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       cancelAnimationFrame(frameId);
       if (scrollAnimFrame !== null) cancelAnimationFrame(scrollAnimFrame);
       if (cooldownTimer !== null) clearTimeout(cooldownTimer);
+      if (autoExpandTimer !== null) clearTimeout(autoExpandTimer);
       if (panelAnimFrame !== null) cancelAnimationFrame(panelAnimFrame);
       document.removeEventListener("pointermove", handlePointerMove);
       document.removeEventListener("pointerdown", handlePointerDown);
