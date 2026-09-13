@@ -326,14 +326,17 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
     // reads that back rather than tracking its own separate boolean that
     // could drift out of sync with it.
     let nightMode = document.documentElement.dataset.theme === "dark";
-    let lightSwitch: { toggleEl: SVGRectElement; halfHeight: number; toggleHeight: number } | null = null;
+    let lightSwitch: { toggleGroup: SVGGElement; toggleShape: SVGPolygonElement } | null = null;
 
     function updateSwitchVisual() {
       if (!lightSwitch) return;
-      const { toggleEl, halfHeight, toggleHeight } = lightSwitch;
-      const margin = (halfHeight * 2 - toggleHeight) * 0.18;
-      toggleEl.setAttribute("y", String(nightMode ? halfHeight - toggleHeight - margin : -halfHeight + margin));
-      toggleEl.setAttribute("fill", nightMode ? "#4c4a63" : "#fbbf24");
+      const { toggleGroup, toggleShape } = lightSwitch;
+      // The toggle bat is drawn once, angled head at the top (see
+      // spawnLightSwitch) — night mode just flips it upside down around
+      // its own center instead of redrawing it, so the head ends up at
+      // the bottom like a real switch flipped off.
+      toggleGroup.setAttribute("transform", nightMode ? "scale(1,-1)" : "scale(1,1)");
+      toggleShape.setAttribute("fill", nightMode ? "#4c4a63" : "#fbbf24");
     }
 
     function toggleNightMode() {
@@ -393,10 +396,13 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       dittoBlob = { nodes: createDittoNodes(x, y, spec.size), radius: spec.size, pathEl, faceEl };
     }
 
-    // A rocker switch inside a rounded plate — plate color is the spec's
-    // own CSS-var color (see makeLightSwitchShape) so it always matches
-    // the site's current surface tone; the toggle nub's position/color
-    // are set by updateSwitchVisual, driven by the live nightMode value.
+    // Styled after a traditional stencil-icon light switch: a bold-outline
+    // rounded plate, a plus-slot screw at top and bottom, and a chunky
+    // toggle bat with an angled 3D-ish head. Plate/screw/outline color is
+    // var(--color-ink) — always the current theme's text color — so the
+    // icon reads as dark-on-light in day mode and light-on-dark in night
+    // mode, like a stencil cut the opposite way. The toggle's own fill
+    // still color-codes the state (warm "lit" yellow vs. muted slate).
     function spawnLightSwitch(spec: ShapeSpec, x: number, y: number, vx: number, vy: number) {
       const body = createShapeBody(spec, x, y);
       Body.setVelocity(body, { x: vx, y: vy });
@@ -406,37 +412,77 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       specs.push(spec);
       Composite.add(engine.world, body);
 
-      const halfWidth = spec.size;
-      const halfHeight = spec.size2 ?? spec.size;
+      const hw = spec.size;
+      const hh = spec.size2 ?? spec.size;
+      const line = "var(--color-ink)";
+      const strokeWidth = Math.max(1.5, hw * 0.09);
 
       const g = document.createElementNS(ns, "g") as SVGGElement;
       g.style.transition = "filter 0.15s ease";
 
       const plate = document.createElementNS(ns, "rect");
-      plate.setAttribute("x", String(-halfWidth));
-      plate.setAttribute("y", String(-halfHeight));
-      plate.setAttribute("width", String(halfWidth * 2));
-      plate.setAttribute("height", String(halfHeight * 2));
-      plate.setAttribute("rx", String(halfWidth * 0.3));
+      plate.setAttribute("x", String(-hw));
+      plate.setAttribute("y", String(-hh));
+      plate.setAttribute("width", String(hw * 2));
+      plate.setAttribute("height", String(hh * 2));
+      plate.setAttribute("rx", String(hw * 0.22));
       plate.setAttribute("fill", spec.color);
-      plate.setAttribute("stroke", "#241f2e");
-      plate.setAttribute("stroke-opacity", "0.15");
-      plate.setAttribute("stroke-width", "2");
+      plate.setAttribute("stroke", line);
+      plate.setAttribute("stroke-width", String(strokeWidth));
       g.appendChild(plate);
 
-      const toggleHeight = halfHeight * 0.62;
-      const toggleEl = document.createElementNS(ns, "rect") as SVGRectElement;
-      toggleEl.setAttribute("x", String(-halfWidth * 0.72));
-      toggleEl.setAttribute("width", String(halfWidth * 1.44));
-      toggleEl.setAttribute("height", String(toggleHeight));
-      toggleEl.setAttribute("rx", String(toggleHeight * 0.35));
-      toggleEl.style.transition = "y 0.2s ease, fill 0.2s ease";
-      g.appendChild(toggleEl);
+      // Two plus-slot screws, top and bottom center.
+      const screwR = hw * 0.16;
+      for (const screwY of [-hh * 0.72, hh * 0.72]) {
+        const screw = document.createElementNS(ns, "circle");
+        screw.setAttribute("cy", String(screwY));
+        screw.setAttribute("r", String(screwR));
+        screw.setAttribute("fill", spec.color);
+        screw.setAttribute("stroke", line);
+        screw.setAttribute("stroke-width", String(strokeWidth * 0.6));
+        g.appendChild(screw);
+
+        const slot = document.createElementNS(ns, "path");
+        slot.setAttribute(
+          "d",
+          `M 0 ${(screwY - screwR * 0.55).toFixed(2)} V ${(screwY + screwR * 0.55).toFixed(2)} M ${(-screwR * 0.55).toFixed(2)} ${screwY} H ${(screwR * 0.55).toFixed(2)}`,
+        );
+        slot.setAttribute("stroke", line);
+        slot.setAttribute("stroke-width", String(strokeWidth * 0.5));
+        g.appendChild(slot);
+      }
+
+      // The toggle bat: a vertical shaft with an angled, wider head at the
+      // top (the pseudo-3D "flipped this way" look from the reference
+      // icon). Defined once with the head at the top; updateSwitchVisual
+      // flips the whole group upside down for night mode rather than
+      // redrawing it.
+      const toggleGroup = document.createElementNS(ns, "g") as SVGGElement;
+      const shaftHalfW = hw * 0.17;
+      const headHalfW = hw * 0.4;
+      const topY = -hh * 0.44;
+      const midY = -hh * 0.06;
+      const bottomY = hh * 0.44;
+      const points = [
+        [-shaftHalfW, midY],
+        [-shaftHalfW, topY],
+        [headHalfW, topY + (midY - topY) * 0.68],
+        [shaftHalfW, midY],
+        [shaftHalfW, bottomY],
+        [-shaftHalfW, bottomY],
+      ];
+      const toggleShape = document.createElementNS(ns, "polygon") as SVGPolygonElement;
+      toggleShape.setAttribute("points", points.map(([px, py]) => `${px.toFixed(2)},${py.toFixed(2)}`).join(" "));
+      toggleShape.setAttribute("stroke", line);
+      toggleShape.setAttribute("stroke-width", String(strokeWidth * 0.8));
+      toggleShape.setAttribute("stroke-linejoin", "round");
+      toggleGroup.appendChild(toggleShape);
+      g.appendChild(toggleGroup);
 
       shapeLayer.appendChild(g);
       elements.push(g);
 
-      lightSwitch = { toggleEl, halfHeight, toggleHeight };
+      lightSwitch = { toggleGroup, toggleShape };
       updateSwitchVisual();
     }
 

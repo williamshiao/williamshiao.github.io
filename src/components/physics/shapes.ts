@@ -135,5 +135,5 @@ export function makeDittoShape(): ShapeSpec {
  * matches the site's *current* surface tone, light or dark.
  */
 export function makeLightSwitchShape(): ShapeSpec {
-  return { id: "light-switch", kind: "switch", color: "var(--color-surface)", size: 22, size2: 32, interactive: true };
+  return { id: "light-switch", kind: "switch", color: "var(--color-surface)", size: 24, size2: 28, interactive: true };
 }
