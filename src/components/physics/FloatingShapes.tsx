@@ -3,19 +3,24 @@ import Matter from "matter-js";
 import { generateShapes, type ShapeSpec } from "./shapes";
 
 /**
- * A physics playground spanning two scroll-snapped sections: the top
- * "terrarium" (zero gravity, zero friction — shapes drift forever, bouncing
- * elastically off its walls, off each other, and off the cursor, which is
- * itself an invisible physical body) and a "floor" section below it. Which
- * mode is active follows the *current* scroll position, not a one-way
- * latch: whenever the floor section is in view, gravity is on, shapes
- * settle (restitution/friction both increase so they actually come to
- * rest instead of bouncing forever), and the cursor stops physically
- * colliding with them (it becomes a sensor — still tracked, just can't
- * knock things around) so you can actually point at and hover a settled
- * shape without shoving it out from under the cursor first. Scrolling back
- * up to the terrarium reverses all of that: gravity off, shapes elastic
- * again, cursor collision back on.
+ * A physics playground spanning one continuous, seamless plate (see
+ * PlaygroundPlate): zero gravity, zero friction near the top — shapes drift
+ * forever, bouncing elastically off the plate's walls, off each other, and
+ * off the cursor, which is itself an invisible physical body. Scrolling
+ * down engages gravity for as long as you're scrolled past a threshold
+ * (scrolling back up disengages it — not a one-way latch): shapes settle
+ * (restitution/friction both increase so they actually come to rest
+ * instead of bouncing forever), and the cursor stops physically colliding
+ * with them (it becomes a sensor — still tracked, just can't knock things
+ * around) so you can actually point at and hover a settled shape without
+ * shoving it out from under the cursor first.
+ *
+ * While gravity is engaged, the floor itself continuously tracks the
+ * *current* viewport's bottom edge (clamped to the plate's actual bottom)
+ * rather than sitting at a fixed document position — so settled shapes are
+ * never left behind, scrolled out of view: scrolling down lets them keep
+ * falling further, and scrolling up pushes the floor back up through them,
+ * carrying them back into view.
  *
  * Two shape tiers (see ./shapes): a larger population of small decorative
  * ones, and a handful of significantly bigger `interactive` ones — only
@@ -29,12 +34,22 @@ import { generateShapes, type ShapeSpec } from "./shapes";
 
 const { Engine, Bodies, Body, Composite, Query } = Matter;
 
+const PLATE_SELECTOR = "[data-plate-bounds]";
 const SMALL_SHAPE_COUNT = 12;
 const BIG_SHAPE_COUNT = 5;
 const WALL_THICKNESS = 100; // generous, so fast bodies can't tunnel through on one big step
 const CURSOR_RADIUS = 14;
 const CURSOR_MASS = 60; // heavy relative to the shapes — a paddle, not another puck
 const SPAWN_SPEED = 2.2; // px/frame, initial drift speed
+
+// Scrolling past this fraction of a viewport height engages gravity.
+const GRAVITY_TRIGGER_FRACTION = 0.4;
+// Floor tracking: kept a little above the literal bottom edge of the
+// viewport, and its own movement is capped per frame (rather than jumping
+// straight to the target) so a big scroll jump can't let it tunnel clean
+// through a resting shape without a collision ever being detected.
+const FLOOR_MARGIN = 24;
+const MAX_FLOOR_STEP = 40;
 
 const GRAVITY_Y = 1;
 // Shapes are perfectly elastic/frictionless while floating; SETTLE_* apply
@@ -135,45 +150,73 @@ export function FloatingShapes() {
     const engine = Engine.create({ gravity: { x: 0, y: 0 } });
     let gravityEngaged = false;
 
-    // Walls: top + left + right always bound the terrarium section; the
-    // "floor" wall sits at the terrarium's bottom until gravity engages,
-    // then relocates to the floor section's bottom, opening the terrarium
-    // up so anything still airborne falls through into it.
-    let wallBodies: Matter.Body[] = [];
-    function rebuildWalls() {
-      Composite.remove(engine.world, wallBodies);
-      const terrarium = getDocRect("[data-terrarium-bounds]");
-      const floor = getDocRect("[data-floor-bounds]");
-      if (!terrarium) {
-        wallBodies = [];
+    // Walls are persistent bodies, not rebuilt every time something
+    // changes — top/left/right are fixed to the plate's bounds and only
+    // move on resize; the floor is repositioned every frame (see
+    // updateFloor) while gravity is engaged, tracking the viewport.
+    let topWall: Matter.Body | null = null;
+    let leftWall: Matter.Body | null = null;
+    let rightWall: Matter.Body | null = null;
+    let floorWall: Matter.Body | null = null;
+
+    function buildWalls() {
+      const existing = [topWall, leftWall, rightWall, floorWall].filter((b): b is Matter.Body => b !== null);
+      if (existing.length) Composite.remove(engine.world, existing);
+
+      const plate = getDocRect(PLATE_SELECTOR);
+      if (!plate) {
+        topWall = leftWall = rightWall = floorWall = null;
         return;
       }
       const t = WALL_THICKNESS;
-      const bottom = gravityEngaged && floor ? floor.bottom : terrarium.bottom;
-      const spanTop = terrarium.top;
-      const spanHeight = bottom - spanTop;
-      const cx = terrarium.left + terrarium.width / 2;
+      const cx = plate.left + plate.width / 2;
       const wallOpts = { isStatic: true, restitution: 1, friction: 0 };
-      wallBodies = [
-        Bodies.rectangle(cx, spanTop - t / 2, terrarium.width + t * 2, t, wallOpts), // top
-        Bodies.rectangle(cx, bottom + t / 2, terrarium.width + t * 2, t, wallOpts), // floor
-        Bodies.rectangle(terrarium.left - t / 2, spanTop + spanHeight / 2, t, spanHeight + t * 2, wallOpts), // left
-        Bodies.rectangle(terrarium.right + t / 2, spanTop + spanHeight / 2, t, spanHeight + t * 2, wallOpts), // right
-      ];
-      Composite.add(engine.world, wallBodies);
+      topWall = Bodies.rectangle(cx, plate.top - t / 2, plate.width + t * 2, t, wallOpts);
+      leftWall = Bodies.rectangle(plate.left - t / 2, plate.top + plate.height / 2, t, plate.height + t * 2, wallOpts);
+      rightWall = Bodies.rectangle(plate.right + t / 2, plate.top + plate.height / 2, t, plate.height + t * 2, wallOpts);
+      floorWall = Bodies.rectangle(cx, plate.bottom + t / 2, plate.width + t * 2, t, wallOpts);
+      Composite.add(engine.world, [topWall, leftWall, rightWall, floorWall]);
+      snapFloorToTarget();
     }
-    rebuildWalls();
+
+    function floorTargetBottom(): number {
+      const plate = getDocRect(PLATE_SELECTOR);
+      const plateBottom = plate ? plate.bottom : window.scrollY + window.innerHeight;
+      if (!gravityEngaged) return plateBottom;
+      return Math.min(window.scrollY + window.innerHeight - FLOOR_MARGIN, plateBottom);
+    }
+
+    // Used right after (re)building walls, and on a gravity-mode switch —
+    // skips the per-frame step cap so it doesn't visibly crawl into place.
+    function snapFloorToTarget() {
+      if (!floorWall) return;
+      Body.setPosition(floorWall, { x: floorWall.position.x, y: floorTargetBottom() + WALL_THICKNESS / 2 });
+    }
+
+    // Called every frame while gravity is engaged: eases the floor toward
+    // the current viewport bottom rather than jumping straight there, so a
+    // big scroll delta in one frame can't let it tunnel through a resting
+    // shape without a collision ever being detected.
+    function updateFloor() {
+      if (!floorWall) return;
+      const targetY = floorTargetBottom() + WALL_THICKNESS / 2;
+      const dy = targetY - floorWall.position.y;
+      const clamped = Math.max(-MAX_FLOOR_STEP, Math.min(MAX_FLOOR_STEP, dy));
+      if (clamped !== 0) Body.setPosition(floorWall, { x: floorWall.position.x, y: floorWall.position.y + clamped });
+    }
+
+    buildWalls();
 
     const handleResize = () => {
       setViewport();
-      rebuildWalls();
+      buildWalls();
     };
     window.addEventListener("resize", handleResize);
 
-    // Shape bodies, spread out inside the terrarium with a small random walk
-    // of initial velocity — Matter's own solver untangles any initial
-    // overlap over the first few frames.
-    const terrariumRect = getDocRect("[data-terrarium-bounds]");
+    // Shape bodies, spread out inside the plate's upper (zero-g) area with
+    // a small random walk of initial velocity — Matter's own solver
+    // untangles any initial overlap over the first few frames.
+    const plateRect = getDocRect(PLATE_SELECTOR);
     const shapes = generateShapes(SMALL_SHAPE_COUNT, BIG_SHAPE_COUNT);
     const ns = "http://www.w3.org/2000/svg";
     const shapeLayer = document.createElementNS(ns, "g");
@@ -183,10 +226,10 @@ export function FloatingShapes() {
     const elements: SVGGElement[] = [];
     const interactiveFlags: boolean[] = [];
     shapes.forEach((spec, i) => {
-      const cx = terrariumRect ? terrariumRect.left + terrariumRect.width / 2 : window.innerWidth / 2;
-      const cy = terrariumRect ? terrariumRect.top + terrariumRect.height / 2 : window.innerHeight / 2;
-      const spreadX = terrariumRect ? terrariumRect.width * 0.3 : 200;
-      const spreadY = terrariumRect ? terrariumRect.height * 0.3 : 200;
+      const cx = plateRect ? plateRect.left + plateRect.width / 2 : window.innerWidth / 2;
+      const cy = plateRect ? plateRect.top + window.innerHeight / 2 : window.innerHeight / 2;
+      const spreadX = plateRect ? plateRect.width * 0.3 : 200;
+      const spreadY = window.innerHeight * 0.3;
       const angle = (i / shapes.length) * Math.PI * 2;
       const x = cx + Math.cos(angle) * spreadX * (0.5 + 0.5 * Math.random());
       const y = cy + Math.sin(angle) * spreadY * (0.5 + 0.5 * Math.random());
@@ -222,8 +265,8 @@ export function FloatingShapes() {
     });
     Composite.add(engine.world, cursorBody);
 
-    // Which mode is active follows the *current* scroll position (see the
-    // IntersectionObserver below), not a one-way latch — scrolling back up
+    // Which mode is active follows the *current* scroll position (checked
+    // every frame, see tick), not a one-way latch — scrolling back up
     // reverses all of it.
     let hoveredIndex = -1;
     function setGravityMode(enabled: boolean) {
@@ -241,19 +284,6 @@ export function FloatingShapes() {
         elements[hoveredIndex].style.filter = "";
         hoveredIndex = -1;
       }
-      rebuildWalls();
-    }
-    const floorEl = document.querySelector("[data-floor-bounds]");
-    let observer: IntersectionObserver | null = null;
-    if (floorEl) {
-      observer = new IntersectionObserver(
-        (entries) => {
-          const isVisible = entries.some((entry) => entry.isIntersecting);
-          setGravityMode(isVisible);
-        },
-        { threshold: 0.3 },
-      );
-      observer.observe(floorEl);
     }
 
     let lastClientX = -9999;
@@ -278,6 +308,9 @@ export function FloatingShapes() {
     const FRAME_MS = 1000 / 60;
     let frameId: number;
     function tick() {
+      setGravityMode(window.scrollY > window.innerHeight * GRAVITY_TRIGGER_FRACTION);
+      updateFloor();
+
       if (hasMouse) {
         // Read scroll position fresh each frame — the document point under
         // the cursor changes when the page scrolls even without a new
@@ -334,7 +367,6 @@ export function FloatingShapes() {
 
     return () => {
       cancelAnimationFrame(frameId);
-      observer?.disconnect();
       document.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("resize", handleResize);
       Composite.clear(engine.world, false);
