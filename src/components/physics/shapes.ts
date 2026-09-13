@@ -141,12 +141,12 @@ export function makeLightSwitchShape(): ShapeSpec {
 }
 
 /**
- * A round push-button — bezel + a colored center cap, like an arcade/panic
- * button — that toggles the shape glow effect on click (see
- * FloatingShapes' toggleGlow/spawnGlowButton). Same "always present,
- * fixed size" treatment as the switch, and for the same reason: `color`
- * is the bezel's CSS-var fill, always matching the site's current
- * surface tone.
+ * A little light bulb — glass + filament + a screw base, in the same
+ * stencil-icon style as the switch (see makeLightSwitchShape) — that
+ * toggles the shape glow effect on click (see FloatingShapes'
+ * toggleGlow/spawnGlowButton). Same "always present, fixed size"
+ * treatment as the switch, and for the same reason: `color` is the
+ * base's CSS-var fill, always matching the site's current surface tone.
  */
 export function makeGlowButtonShape(): ShapeSpec {
   return { id: "glow-button", kind: "glow-button", color: "var(--color-surface)", size: 24, interactive: true };

@@ -61,16 +61,17 @@ import {
  *
  * Every shape (except the switch, which reads as UI chrome rather than a
  * toy) also emits a soft blurred glow in its own color, on a separate
- * layer *behind* the solid shapes. Glows use `mix-blend-mode:
- * plus-lighter` — true additive light mixing — inside a parent with
- * `isolation: isolate`, so two overlapping glows blend into each other
- * (like colored light) rather than one just covering the other, while
- * the flattened result still composites normally against the page behind
- * it. No shaders/canvas needed: SVG filters + CSS blend modes are
- * GPU-accelerated in every modern browser and this is only ~11 glows.
+ * layer *behind* the solid shapes — just a blurred, translucent, enlarged
+ * copy of its own silhouette, composited normally (no blend mode). An
+ * earlier version blended overlapping glows together via
+ * `mix-blend-mode: plus-lighter` inside an isolated layer, which looked
+ * nice but forced the browser to composite the whole glow layer in its
+ * own isolated pass every frame — with several blurred, constantly-moving
+ * elements that measurably cost frame rate, so it was removed in favor of
+ * plain layered transparency.
  *
- * A third special shape — a small round push-button (see
- * makeGlowButtonShape) — toggles that whole glow layer on/off, the same
+ * A third special shape — a light bulb (see makeGlowButtonShape/
+ * spawnGlowButton) — toggles that whole glow layer on/off, the same
  * click path as the switch and the pageId panel.
  *
  * Matter.js (MIT) rather than custom code: rigid-body elastic collision
@@ -241,18 +242,17 @@ function createShapeElement(spec: ShapeSpec): SVGGraphicsElement {
   return el;
 }
 
-/** A blurred, enlarged, translucent silhouette in the shape's own color —
- * see the intro comment for the blend-mode trick that makes overlapping
- * glows mix rather than just stack. Ditto draws as a plain circle here
- * (its actual body is a circle too — see createShapeBody — the soft-body
- * skin is a purely visual layer on top, no need to chase its wobble for
- * something this soft-edged anyway). */
+/** A blurred, enlarged, translucent silhouette in the shape's own color,
+ * composited normally (no blend mode — see the intro comment for why).
+ * Ditto draws as a plain circle here (its actual body is a circle too —
+ * see createShapeBody — the soft-body skin is a purely visual layer on
+ * top, no need to chase its wobble for something this soft-edged
+ * anyway). */
 function createGlowElement(spec: ShapeSpec, filterId: string): SVGGElement {
   const ns = "http://www.w3.org/2000/svg";
   const g = document.createElementNS(ns, "g") as SVGGElement;
   g.setAttribute("filter", `url(#${filterId})`);
   g.setAttribute("opacity", String(GLOW_OPACITY));
-  g.style.mixBlendMode = "plus-lighter";
 
   if (spec.kind === "rect") {
     const w = spec.size * GLOW_SCALE;
@@ -421,11 +421,10 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
     defs.appendChild(makeBlurFilter("glow-blur-big", GLOW_BLUR_BIG));
     svg.appendChild(defs);
 
-    // Glows live behind the solid shapes, in their own isolated stacking
-    // context — see the intro comment for why that's what makes
-    // overlapping glows blend into each other instead of just stacking.
+    // Glows live behind the solid shapes, layered with plain transparency
+    // (see the intro comment for why this isn't a blend-mode/isolated
+    // stacking context anymore).
     const glowLayer = document.createElementNS(ns, "g");
-    glowLayer.style.isolation = "isolate";
     svg.appendChild(glowLayer);
 
     const shapeLayer = document.createElementNS(ns, "g");
@@ -491,12 +490,12 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
         return true;
       }
     })();
-    let glowButton: { capEl: SVGCircleElement } | null = null;
+    let glowButton: { glassEl: SVGCircleElement } | null = null;
     if (!glowEnabled) glowLayer.style.display = "none";
 
     function updateGlowButtonVisual() {
       if (!glowButton) return;
-      glowButton.capEl.setAttribute("fill", glowEnabled ? "#fb923c" : "#9ca3af");
+      glowButton.glassEl.setAttribute("fill", glowEnabled ? "#fde047" : "#9ca3af");
     }
 
     function toggleGlow() {
@@ -654,9 +653,11 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       updateSwitchVisual();
     }
 
-    // A round push-button — bezel + colored cap, like an arcade button —
+    // A little light bulb — glass, a zigzag filament, and a screw base —
     // that toggles the glow layer on click (see toggleGlow). Same
-    // stencil-family outline treatment as the switch.
+    // stencil-family outline treatment as the switch: bold var(--color-ink)
+    // strokes, a var(--color-surface)-ish base so it always matches the
+    // current theme.
     function spawnGlowButton(spec: ShapeSpec, x: number, y: number, vx: number, vy: number) {
       const body = createShapeBody(spec, x, y);
       Body.setVelocity(body, { x: vx, y: vy });
@@ -668,28 +669,67 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
 
       const r = spec.size;
       const line = "var(--color-ink)";
-      const strokeWidth = Math.max(1.5, r * 0.1);
+      const strokeWidth = Math.max(1.5, r * 0.09);
 
       const g = document.createElementNS(ns, "g") as SVGGElement;
       g.style.transition = "filter 0.15s ease";
 
-      const bezel = document.createElementNS(ns, "circle");
-      bezel.setAttribute("r", String(r));
-      bezel.setAttribute("fill", spec.color);
-      bezel.setAttribute("stroke", line);
-      bezel.setAttribute("stroke-width", String(strokeWidth));
-      g.appendChild(bezel);
+      // The glass bulb — its fill is the on/off state color (see
+      // updateGlowButtonVisual), everything else is fixed ink/surface.
+      const glassCy = -r * 0.1;
+      const glassR = r * 0.6;
+      const glassEl = document.createElementNS(ns, "circle") as SVGCircleElement;
+      glassEl.setAttribute("cy", String(glassCy));
+      glassEl.setAttribute("r", String(glassR));
+      glassEl.setAttribute("stroke", line);
+      glassEl.setAttribute("stroke-width", String(strokeWidth));
+      g.appendChild(glassEl);
 
-      const capEl = document.createElementNS(ns, "circle") as SVGCircleElement;
-      capEl.setAttribute("r", String(r * 0.64));
-      capEl.setAttribute("stroke", line);
-      capEl.setAttribute("stroke-width", String(strokeWidth * 0.7));
-      g.appendChild(capEl);
+      // A simple zigzag filament inside the glass.
+      const filamentY = glassCy + glassR * 0.35;
+      const filamentTop = glassCy - glassR * 0.35;
+      const filament = document.createElementNS(ns, "path");
+      filament.setAttribute(
+        "d",
+        `M ${(-r * 0.2).toFixed(2)} ${filamentY.toFixed(2)} L ${(-r * 0.06).toFixed(2)} ${filamentTop.toFixed(2)} L ${(r * 0.06).toFixed(2)} ${filamentY.toFixed(2)} L ${(r * 0.2).toFixed(2)} ${filamentTop.toFixed(2)}`,
+      );
+      filament.setAttribute("fill", "none");
+      filament.setAttribute("stroke", line);
+      filament.setAttribute("stroke-width", String(strokeWidth * 0.55));
+      filament.setAttribute("stroke-linecap", "round");
+      filament.setAttribute("stroke-linejoin", "round");
+      g.appendChild(filament);
+
+      // Screw base — drawn last so it overlaps the bottom of the glass.
+      const baseW = r * 0.56;
+      const baseH = r * 0.34;
+      const baseY = r * 0.26;
+      const base = document.createElementNS(ns, "rect");
+      base.setAttribute("x", String(-baseW / 2));
+      base.setAttribute("y", String(baseY));
+      base.setAttribute("width", String(baseW));
+      base.setAttribute("height", String(baseH));
+      base.setAttribute("rx", String(r * 0.06));
+      base.setAttribute("fill", spec.color);
+      base.setAttribute("stroke", line);
+      base.setAttribute("stroke-width", String(strokeWidth * 0.85));
+      g.appendChild(base);
+
+      for (const ty of [baseY + baseH * 0.35, baseY + baseH * 0.68]) {
+        const thread = document.createElementNS(ns, "line");
+        thread.setAttribute("x1", String(-baseW / 2 + strokeWidth));
+        thread.setAttribute("y1", String(ty));
+        thread.setAttribute("x2", String(baseW / 2 - strokeWidth));
+        thread.setAttribute("y2", String(ty));
+        thread.setAttribute("stroke", line);
+        thread.setAttribute("stroke-width", String(strokeWidth * 0.5));
+        g.appendChild(thread);
+      }
 
       shapeLayer.appendChild(g);
       elements.push(g);
 
-      glowButton = { capEl };
+      glowButton = { glassEl };
       updateGlowButtonVisual();
     }
 
