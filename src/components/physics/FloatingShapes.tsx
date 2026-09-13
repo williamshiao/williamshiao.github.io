@@ -65,11 +65,11 @@ import { STRINGS, type Lang } from "../../i18n/strings";
  * a pointer over anything that really does something on click (a pageId
  * shape, the switch, the glow button), not just anything that merely
  * darkens on hover. The Internships shape specifically also opens
- * *itself* the instant it lands, no click needed — see the same
- * handleFloorCollision — as a one-time demonstration that clicking a
- * shape does something real, rather than leaving a visitor to discover
- * that on their own; Contact (below) doesn't get that same auto-open,
- * just the regular click.
+ * *itself*, no click needed, the moment it collides with anything once
+ * it's down on the second page (see handleInternshipsAutoOpen) — a
+ * one-time demonstration that clicking a shape does something real,
+ * rather than leaving a visitor to discover that on their own; Contact
+ * (below) doesn't get that same auto-open, just the regular click.
  *
  * A second special shape — a small rocker-switch rectangle (see
  * makeLightSwitchShape) — toggles the site's night mode on click: flips
@@ -171,13 +171,14 @@ const HOVER_FILTER = "brightness(0.72)";
 // opacity change on it (hiding again, expand/shrink) stays snappy.
 const LABEL_REVEAL_MS = 1400;
 const LABEL_HIDE_MS = 200;
-// A page shape opens itself the instant it lands (see handleFloorCollision)
-// — 0ms, not actually synchronous: it's still deferred a tick via
-// setTimeout rather than called straight from the collision callback, since
-// that callback runs *inside* Matter's own Engine.update, and beginExpand
-// mutates the world (swaps the body) — doing that reentrantly, mid-step,
-// is asking for trouble. A macrotask later is still well within the same
-// frame the user sees, so it reads as instant.
+// Internships opens itself the instant it collides with anything on the
+// second page (see handleInternshipsAutoOpen) — 0ms, not actually
+// synchronous: it's still deferred a tick via setTimeout rather than
+// called straight from the collision callback, since that callback runs
+// *inside* Matter's own Engine.update, and beginExpand mutates the world
+// (swaps the body) — doing that reentrantly, mid-step, is asking for
+// trouble. A macrotask later is still well within the same frame the user
+// sees, so it reads as instant.
 const AUTO_EXPAND_DELAY_MS = 0;
 
 // Every shape's soft color glow — see the intro comment for how the
@@ -637,10 +638,9 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
     // during the *current* fall — cleared on every disengage so the same
     // dramatic beat replays each time it scrolls down and lands again.
     const landedLabelIndices = new Set<number>();
-    // Pending auto-open of the one shape that lands with a real page behind
-    // it (see handleFloorCollision) — tracked so scrolling back up before it
-    // fires can cancel it instead of popping the panel open after the user's
-    // already left.
+    // Pending auto-open of Internships (see handleInternshipsAutoOpen) —
+    // tracked so scrolling back up before it fires can cancel it instead of
+    // popping the panel open after the user's already left.
     let autoExpandTimer: ReturnType<typeof setTimeout> | null = null;
 
     // Ditto gets a real rigid circle body too (see createShapeBody) so it
@@ -1221,23 +1221,50 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
           const label = labelElements[index]!;
           label.style.transitionDuration = `${LABEL_REVEAL_MS}ms`;
           label.style.opacity = "1";
-
-          // Internships specifically opens itself once it lands — see
-          // AUTO_EXPAND_DELAY_MS. This is the site demonstrating its own
-          // "click a shape, it opens a page" trick rather than waiting for
-          // a visitor to discover it themselves — see the FloatingShapes
-          // intro comment. Contact is a real pageId shape too now, but
-          // doesn't get this same auto-open, just the regular click.
-          if (specs[index].pageId === "internships" && !autoExpandTimer) {
-            autoExpandTimer = setTimeout(() => {
-              autoExpandTimer = null;
-              if (gravityEngaged && !panelState && !transitioning) beginExpand(index);
-            }, AUTO_EXPAND_DELAY_MS);
-          }
         }
       }
     }
     Events.on(engine, "collisionStart", handleFloorCollision);
+
+    // Internships opens itself once it's down on the second page — see the
+    // FloatingShapes intro comment for why (demonstrating the click-to-open
+    // trick rather than leaving a visitor to find it). Deliberately *not*
+    // tied to the same "real ground landing" collisionStart the label
+    // reveal above uses: waiting for one single fresh contact transition
+    // turned out not to fire reliably (a body already resting against
+    // something from a previous fall can re-engage gravity without ever
+    // separating first, so no new collisionStart ever comes). Watching
+    // collisionActive instead — which fires every step for any pair that's
+    // *currently* touching, not just the instant contact begins — catches
+    // it regardless of exactly when or how contact started. Only the
+    // cursor doesn't count as "anything"; every wall and every other shape
+    // does, per "the moment it collides with anything" once it's arrived.
+    const internshipsIndex = specs.findIndex((s) => s.pageId === "internships");
+    let internshipsAutoOpened = false;
+    function handleInternshipsAutoOpen(event: Matter.IEventCollision<Matter.Engine>) {
+      if (!gravityEngaged || internshipsAutoOpened || internshipsIndex < 0) return;
+      const index = internshipsIndex;
+      const body = bodies[index];
+      for (const pair of event.pairs) {
+        if (pair.bodyA !== body && pair.bodyB !== body) continue;
+        const other = pair.bodyA === body ? pair.bodyB : pair.bodyA;
+        if (other === cursorBody) continue;
+        internshipsAutoOpened = true;
+        if (!autoExpandTimer) {
+          // Deferred a tick (see AUTO_EXPAND_DELAY_MS) rather than called
+          // straight from here — this callback runs *inside* Matter's own
+          // Engine.update, and beginExpand mutates the world (swaps the
+          // body), which is asking for trouble done reentrantly, mid-step.
+          autoExpandTimer = setTimeout(() => {
+            autoExpandTimer = null;
+            if (gravityEngaged && !panelState && !transitioning) beginExpand(index);
+          }, AUTO_EXPAND_DELAY_MS);
+        }
+        return;
+      }
+    }
+    Events.on(engine, "collisionActive", handleInternshipsAutoOpen);
+    Events.on(engine, "collisionStart", handleInternshipsAutoOpen);
 
     // The cursor is a real physics body — heavy relative to the shapes, and
     // manually driven to the mouse's *document* position every frame
@@ -1294,8 +1321,10 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
         }
         landedLabelIndices.clear();
         // Scrolling back up before the auto-open beat fires (see
-        // handleFloorCollision) cancels it — it should never pop the panel
-        // open once the shape's already been launched back into zero-g.
+        // handleInternshipsAutoOpen) cancels it — it should never pop the
+        // panel open once the shape's already been launched back into
+        // zero-g, and it should replay next time it comes back down.
+        internshipsAutoOpened = false;
         if (autoExpandTimer) {
           clearTimeout(autoExpandTimer);
           autoExpandTimer = null;
@@ -1431,9 +1460,10 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       if (panelState || transitioning) return;
       const spec = specs[index];
       if (!spec.pageId) return;
-      // A manual click beats the auto-open beat (see handleFloorCollision)
-      // — without this, closing a manually-opened panel just before that
-      // timer fires would have it pop back open on its own right after.
+      // A manual click beats the auto-open beat (see
+      // handleInternshipsAutoOpen) — without this, closing a manually-
+      // opened panel just before that timer fires would have it pop back
+      // open on its own right after.
       if (autoExpandTimer) {
         clearTimeout(autoExpandTimer);
         autoExpandTimer = null;
@@ -1688,6 +1718,8 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("wheel", handleWheel);
       Events.off(engine, "collisionStart", handleFloorCollision);
+      Events.off(engine, "collisionActive", handleInternshipsAutoOpen);
+      Events.off(engine, "collisionStart", handleInternshipsAutoOpen);
       Composite.clear(engine.world, false);
       Engine.clear(engine);
       defs.remove();
