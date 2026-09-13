@@ -1,7 +1,14 @@
 import { useEffect, useRef } from "react";
 import Matter from "matter-js";
 import { generateShapes, type ShapeSpec } from "./shapes";
-import { createDittoNodes, stepDittoBlob, appendDittoFace, type DittoBlobState } from "./dittoBlob";
+import {
+  createDittoNodes,
+  computeRestEdgeLengths,
+  stepDittoBlob,
+  appendDittoFace,
+  DITTO_BODY_HALF_EXTENT_RATIO,
+  type DittoBlobState,
+} from "./dittoBlob";
 
 /**
  * A physics playground spanning one continuous, seamless plate (see
@@ -82,7 +89,13 @@ const BIG_SHAPE_COUNT = 5;
 const WALL_THICKNESS = 100; // generous, so fast bodies can't tunnel through on one big step
 const CURSOR_RADIUS = 14;
 const CURSOR_MASS = 60; // heavy relative to the shapes — a paddle, not another puck
-const SPAWN_SPEED = 2.2; // px/frame, initial drift speed
+// Small shapes drift slower than big ones — at the small tier's size,
+// the same speed as the big shapes read as noticeably more frantic (a
+// smaller object crossing the same distance in the same time just looks
+// faster), especially once several of them start trading momentum in
+// collisions.
+const SPAWN_SPEED_SMALL = 1.2;
+const SPAWN_SPEED_BIG = 2.2; // px/frame, initial drift speed
 
 // Scrolling past this fraction of a viewport height engages gravity.
 const GRAVITY_TRIGGER_FRACTION = 0.4;
@@ -164,8 +177,15 @@ function createShapeBody(spec: ShapeSpec, x: number, y: number): Matter.Body {
     frictionStatic: 0,
     angle: spec.rotation ?? 0,
   };
-  if (spec.kind === "circle" || spec.kind === "ditto" || spec.kind === "glow-button") {
+  if (spec.kind === "circle" || spec.kind === "glow-button") {
     return Bodies.circle(x, y, spec.size, common);
+  }
+  if (spec.kind === "ditto") {
+    // A square collider (chamfered like any other rect shape) rather than
+    // a circle, sized to roughly match the squircle skin's own footprint
+    // — see dittoBlob's DITTO_BODY_HALF_EXTENT_RATIO.
+    const half = spec.size * DITTO_BODY_HALF_EXTENT_RATIO;
+    return Bodies.rectangle(x, y, half * 2, half * 2, { ...common, chamfer: { radius: half * 0.3 } });
   }
   if (spec.kind === "switch" || spec.kind === "rect") {
     return Bodies.rectangle(x, y, spec.size * 2, (spec.size2 ?? spec.size) * 2, {
@@ -524,7 +544,8 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       elements.push(g);
 
       dittoIndex = bodies.length - 1;
-      dittoBlob = { nodes: createDittoNodes(x, y, spec.size), radius: spec.size, pathEl, faceEl };
+      const dittoNodes = createDittoNodes(x, y, spec.size);
+      dittoBlob = { nodes: dittoNodes, restEdgeLengths: computeRestEdgeLengths(dittoNodes), pathEl, faceEl };
     }
 
     // Styled after a traditional stencil-icon light switch: a bold-outline
@@ -669,8 +690,9 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       const x = cx + Math.cos(angle) * spreadX * (0.5 + 0.5 * Math.random());
       const y = cy + Math.sin(angle) * spreadY * (0.5 + 0.5 * Math.random());
       const dir = Math.random() * Math.PI * 2;
-      const vx = Math.cos(dir) * SPAWN_SPEED;
-      const vy = Math.sin(dir) * SPAWN_SPEED;
+      const speed = i < SMALL_SHAPE_COUNT ? SPAWN_SPEED_SMALL : SPAWN_SPEED_BIG;
+      const vx = Math.cos(dir) * speed;
+      const vy = Math.sin(dir) * speed;
       if (spec.kind === "ditto") {
         spawnDittoBlob(spec, x, y, vx, vy);
       } else if (spec.kind === "switch") {

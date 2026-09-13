@@ -1,14 +1,15 @@
 /**
  * Ditto's soft-body skin — a ring of nodes that visually wobbles, squashes,
- * and stretches around the rigid Matter.js circle body that actually
- * handles collision for it (see FloatingShapes: createShapeBody treats
- * "ditto" as a plain circle). The nodes never resolve collisions
- * themselves; every frame they just chase a goal position derived from
- * that body's own position/angle (Verlet integration gives them their own
- * inertia, so a sudden bounce makes them lag and overshoot before
- * catching back up — the actual squash-and-stretch), plus simple
- * neighbor-distance constraints so they stay evenly spaced around the
- * perimeter instead of bunching up.
+ * and stretches around the rigid Matter.js body that actually handles
+ * collision for it (see FloatingShapes: createShapeBody gives "ditto" a
+ * square-ish chamfered-rect body, matching the squircle rest shape
+ * below). The nodes never resolve collisions themselves; every frame
+ * they just chase a goal position derived from that body's own
+ * position/angle (Verlet integration gives them their own inertia, so a
+ * sudden bounce makes them lag and overshoot before catching back up —
+ * the actual squash-and-stretch), plus simple neighbor-distance
+ * constraints so they stay evenly spaced around the perimeter instead of
+ * bunching up.
  *
  * This is deliberately a different architecture from the original blob
  * cursor (see git history for BlobCursor.tsx/blobPhysics.ts, banked
@@ -17,7 +18,8 @@
  * and topologically invert over many frames. Anchoring every node's goal
  * to an externally-driven, authoritative rigid body sidesteps that whole
  * class of bug — the nodes can wobble, but they can never wander more
- * than a spring's-worth away from a perfectly valid circle.
+ * than a spring's-worth away from a perfectly valid copy of the rest
+ * shape (originally a circle, now a squircle — see SQUIRCLE_EXPONENT).
  */
 
 export interface DittoNode {
@@ -31,26 +33,60 @@ export interface DittoNode {
 
 export interface DittoBlobState {
   nodes: DittoNode[];
-  radius: number;
+  // Per-edge rest lengths (nodes[i] to nodes[i+1]), precomputed from the
+  // actual rest positions rather than a single shared formula — needed
+  // once the rest shape stopped being a circle (see below), since a
+  // square's corner-to-corner spacing isn't the same as its side spacing,
+  // and using one shared length for every edge would fight itself into a
+  // pinched/lopsided rest shape.
+  restEdgeLengths: number[];
   pathEl: SVGPathElement;
   faceEl: SVGGElement;
 }
 
-const NODE_COUNT = 10;
+const NODE_COUNT = 12;
 // How hard each node is pulled back toward its goal position every frame
 // (the "shape matching" stiffness) vs. how much of its own momentum it
-// keeps (Verlet damping) — stiff enough to always spring back to round,
+// keeps (Verlet damping) — stiff enough to always spring back to shape,
 // loose enough to visibly squish on impact first.
 const STIFFNESS = 0.2;
 const DAMPING = 0.9;
 const EDGE_ITERATIONS = 2;
 
+// Ditto's rest shape is a superellipse ("squircle") rather than a plain
+// circle — a rounded square, not a faceted one, since a handful of nodes
+// connected by straight edges would give sharp actual corners no matter
+// what shape they're aiming for anyway. SQUIRCLE_EXPONENT controls how
+// square vs. round it reads (2 would be a circle, higher is squarer);
+// SQUIRCLE_REACH scales the whole thing relative to the old circle
+// radius so it reads as roughly the same size, not larger or smaller.
+const SQUIRCLE_EXPONENT = 5;
+const SQUIRCLE_REACH = 0.86;
+
+/** Also used by FloatingShapes to size Ditto's actual (rectangular)
+ * collision body to roughly match this visual footprint. */
+export const DITTO_BODY_HALF_EXTENT_RATIO = SQUIRCLE_REACH;
+
 export function createDittoNodes(x: number, y: number, radius: number): DittoNode[] {
+  const halfExtent = radius * SQUIRCLE_REACH;
+  const exponent = 2 / SQUIRCLE_EXPONENT;
   return Array.from({ length: NODE_COUNT }, (_, i) => {
     const angle = (i / NODE_COUNT) * Math.PI * 2;
-    const rx = Math.cos(angle) * radius;
-    const ry = Math.sin(angle) * radius;
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    const rx = Math.sign(c) * Math.abs(c) ** exponent * halfExtent;
+    const ry = Math.sign(s) * Math.abs(s) ** exponent * halfExtent;
     return { x: x + rx, y: y + ry, px: x + rx, py: y + ry, restX: rx, restY: ry };
+  });
+}
+
+/** The rest (relaxed) distance between each pair of neighboring nodes,
+ * measured directly from their own rest offsets — see DittoBlobState's
+ * restEdgeLengths for why this can't just be one shared number anymore. */
+export function computeRestEdgeLengths(nodes: DittoNode[]): number[] {
+  return nodes.map((a, i) => {
+    const b = nodes[(i + 1) % nodes.length];
+    return Math.hypot(b.restX - a.restX, b.restY - a.restY);
   });
 }
 
@@ -81,17 +117,18 @@ export function stepDittoBlob(blob: DittoBlobState, driverX: number, driverY: nu
     n.y += (goalY - n.y) * STIFFNESS;
   }
 
-  // Keep neighbors evenly spaced along the perimeter so the outline stays
-  // a simple ring rather than nodes bunching or crossing locally.
-  const restEdgeLen = 2 * blob.radius * Math.sin(Math.PI / blob.nodes.length);
+  // Keep neighbors at their own rest distance (see restEdgeLengths) so
+  // the outline stays a clean version of the rest shape rather than
+  // nodes bunching or crossing locally.
   for (let iter = 0; iter < EDGE_ITERATIONS; iter++) {
     for (let i = 0; i < blob.nodes.length; i++) {
       const a = blob.nodes[i];
       const b = blob.nodes[(i + 1) % blob.nodes.length];
+      const restLen = blob.restEdgeLengths[i];
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       const dist = Math.hypot(dx, dy) || 0.0001;
-      const diff = ((dist - restEdgeLen) / dist) * 0.5;
+      const diff = ((dist - restLen) / dist) * 0.5;
       const ox = dx * diff;
       const oy = dy * diff;
       a.x += ox;
