@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import Matter from "matter-js";
-import { generateShapes, type ShapeSpec } from "./shapes";
+import { generateShapes, makeArrowShape, type ShapeSpec } from "./shapes";
 
 /**
  * A physics playground spanning one continuous, seamless plate (see
@@ -43,6 +43,7 @@ import { generateShapes, type ShapeSpec } from "./shapes";
 const { Engine, Bodies, Body, Composite, Query } = Matter;
 
 const PLATE_SELECTOR = "[data-plate-bounds]";
+const SCROLL_CUE_SELECTOR = "[data-scroll-cue]";
 const SMALL_SHAPE_COUNT = 12;
 const BIG_SHAPE_COUNT = 5;
 const WALL_THICKNESS = 100; // generous, so fast bodies can't tunnel through on one big step
@@ -253,6 +254,25 @@ export function FloatingShapes() {
     const bodies: Matter.Body[] = [];
     const elements: SVGGElement[] = [];
     const interactiveFlags: boolean[] = [];
+
+    // Adds one shape to every parallel array/the world/the SVG at once —
+    // shared by the initial spawn below and by the scroll-cue arrow
+    // "breaking off" into a real shape later (see convertArrowToShape).
+    function spawnShape(spec: ShapeSpec, x: number, y: number, vx: number, vy: number) {
+      const body = createShapeBody(spec, x, y);
+      Body.setVelocity(body, { x: vx, y: vy });
+      Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.04);
+      bodies.push(body);
+      interactiveFlags.push(spec.interactive);
+      Composite.add(engine.world, body);
+
+      const g = document.createElementNS(ns, "g") as SVGGElement;
+      g.style.transition = "filter 0.15s ease";
+      g.appendChild(createShapeElement(spec));
+      shapeLayer.appendChild(g);
+      elements.push(g);
+    }
+
     shapes.forEach((spec, i) => {
       const cx = plateRect ? plateRect.left + plateRect.width / 2 : window.innerWidth / 2;
       const cy = plateRect ? plateRect.top + window.innerHeight / 2 : window.innerHeight / 2;
@@ -261,21 +281,9 @@ export function FloatingShapes() {
       const angle = (i / shapes.length) * Math.PI * 2;
       const x = cx + Math.cos(angle) * spreadX * (0.5 + 0.5 * Math.random());
       const y = cy + Math.sin(angle) * spreadY * (0.5 + 0.5 * Math.random());
-
-      const body = createShapeBody(spec, x, y);
       const dir = Math.random() * Math.PI * 2;
-      Body.setVelocity(body, { x: Math.cos(dir) * SPAWN_SPEED, y: Math.sin(dir) * SPAWN_SPEED });
-      Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.04);
-      bodies.push(body);
-      interactiveFlags.push(spec.interactive);
-
-      const g = document.createElementNS(ns, "g") as SVGGElement;
-      g.style.transition = "filter 0.15s ease";
-      g.appendChild(createShapeElement(spec));
-      shapeLayer.appendChild(g);
-      elements.push(g);
+      spawnShape(spec, x, y, Math.cos(dir) * SPAWN_SPEED, Math.sin(dir) * SPAWN_SPEED);
     });
-    Composite.add(engine.world, bodies);
 
     // The cursor is a real physics body — heavy relative to the shapes, and
     // manually driven to the mouse's *document* position every frame
@@ -353,6 +361,33 @@ export function FloatingShapes() {
       }
     }
 
+    // The "scroll down" cue (see ScrollCue) is a normal fixed UI element
+    // right up until the first time the user actually scrolls down, at
+    // which point it fades out here and a matching triangle is born into
+    // the physics world in its place — the arrow "breaking off" to join
+    // the other shapes for good. One-time: it never comes back once
+    // converted, even after scrolling back up and down again.
+    let arrowConverted = false;
+    function convertArrowToShape() {
+      if (arrowConverted) return;
+      arrowConverted = true;
+
+      const cueRect = getDocRect(SCROLL_CUE_SELECTOR);
+      const cueEl = document.querySelector<HTMLElement>(SCROLL_CUE_SELECTOR);
+      if (cueEl) {
+        cueEl.style.transition = "opacity 0.25s ease";
+        cueEl.style.opacity = "0";
+      }
+      if (!cueRect) return;
+
+      const spec = makeArrowShape();
+      const x = cueRect.left + cueRect.width / 2;
+      const y = cueRect.top + cueRect.height / 2;
+      // A gentle downward drift, as if it just let go and dropped into the
+      // mix, rather than the fully random spawn velocity of the others.
+      spawnShape(spec, x, y, (Math.random() - 0.5) * 3, 2 + Math.random() * 2);
+    }
+
     // Snap-scroll: the page is only ever fully docked at the top (zero-g
     // hero) or fully at the bottom (gravity-settled) section — one wheel
     // gesture animates the whole way there instead of requiring continuous
@@ -392,6 +427,7 @@ export function FloatingShapes() {
       if (transitioning || Math.abs(e.deltaY) < WHEEL_DEADZONE) return;
       if (e.deltaY > 0 && atTop) {
         atTop = false;
+        convertArrowToShape();
         animateScrollTo(window.innerHeight);
       } else if (e.deltaY < 0 && !atTop) {
         atTop = true;

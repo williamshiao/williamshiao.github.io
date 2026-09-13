@@ -96,3 +96,16 @@ export function generateShapes(smallCount: number, bigCount: number): ShapeSpec[
   const big = Array.from({ length: bigCount }, (_, i) => makeShape(`big-${i}`, true, BIG_SIZE));
   return [...small, ...big];
 }
+
+/**
+ * The one-off shape the "scroll down" cue (see ScrollCue) turns into the
+ * first time the user scrolls down — a small downward-pointing triangle
+ * (rotation = PI flips the default apex-up triangle to apex-down, echoing
+ * the chevron it's replacing) so the hand-off from static UI to physics
+ * object reads as the same object, not a swap. Same palette and size band
+ * as the small decorative tier, since from this point on it just is one.
+ */
+export function makeArrowShape(): ShapeSpec {
+  const [min, max] = SMALL_SIZE.triangle;
+  return { id: "arrow-cue", kind: "triangle", color: randomColor(), size: randomBetween(min, max), rotation: Math.PI, interactive: false };
+}

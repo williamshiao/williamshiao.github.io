@@ -1,3 +1,5 @@
+import { ScrollCue } from "./ScrollCue";
+
 // TODO(content): placeholder bio — replace with real copy once drafted.
 // This is the terrarium's resting/home state — the first thing a visitor
 // sees, so it carries far more visual weight than anything in the tab panels.
@@ -38,6 +40,8 @@ export function Hero() {
         </p>
         {/* TODO(content): expand bio further, add a contact/CTA line once decided. */}
       </div>
+
+      <ScrollCue />
     </div>
   );
 }
