@@ -104,6 +104,10 @@ import { STRINGS, type Lang } from "../../i18n/strings";
 const { Engine, Bodies, Body, Composite, Query, Events } = Matter;
 
 const PLATE_SELECTOR = "[data-plate-bounds]";
+// See spawnKnockoutTargets/the intro comment: any element tagged with this
+// gets a live white "knockout" copy painted above the shapes, clipped every
+// frame to their current silhouettes.
+const KNOCKOUT_SELECTOR = "[data-shape-knockout]";
 const WALL_THICKNESS = 100; // generous, so fast bodies can't tunnel through on one big step
 const CURSOR_RADIUS = 14;
 const CURSOR_MASS = 60; // heavy relative to the shapes — a paddle, not another puck
@@ -198,6 +202,40 @@ function regularPolygonVertices(sides: number, radius: number, rotationOffset = 
     verts.push({ x: Math.cos(angle) * radius, y: Math.sin(angle) * radius });
   }
   return verts;
+}
+
+/** A CSS `clip-path` describing one shape's current silhouette, in
+ * coordinates relative to (originX, originY) — the top-left of whichever
+ * knockout element it's being applied to (see spawnKnockoutTargets). Mirrors
+ * createShapeBody's kind → collider-shape mapping exactly, so the knockout
+ * always matches what the shape can actually be touched/overlapped by, not
+ * just its drawn silhouette. */
+function shapeClipPath(spec: ShapeSpec, cx: number, cy: number, angle: number, originX: number, originY: number): string {
+  const x = cx - originX;
+  const y = cy - originY;
+  if (spec.kind === "circle" || spec.kind === "glow-button" || spec.kind === "language-toggle") {
+    return `circle(${spec.size}px at ${x.toFixed(1)}px ${y.toFixed(1)}px)`;
+  }
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const rotate = (dx: number, dy: number) => `${(x + dx * cos - dy * sin).toFixed(1)}px ${(y + dx * sin + dy * cos).toFixed(1)}px`;
+  if (spec.kind === "triangle") {
+    const points = regularPolygonVertices(3, spec.size).map((p) => rotate(p.x, p.y));
+    return `polygon(${points.join(", ")})`;
+  }
+  // rect/switch/contact-email/contact-code/ditto — all rectangular
+  // colliders (see createShapeBody). Corners are sharp rather than
+  // chamfered here; a small visual approximation that doesn't matter at
+  // this scale.
+  const hw = spec.size;
+  const hh = spec.size2 ?? spec.size;
+  const corners = [
+    [-hw, -hh],
+    [hw, -hh],
+    [hw, hh],
+    [-hw, hh],
+  ];
+  return `polygon(${corners.map(([dx, dy]) => rotate(dx, dy)).join(", ")})`;
 }
 
 function createShapeBody(spec: ShapeSpec, x: number, y: number): Matter.Body {
@@ -374,6 +412,7 @@ interface FloatingShapesProps {
 
 export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: FloatingShapesProps) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const knockoutRef = useRef<HTMLDivElement>(null);
   // Refs rather than effect deps: the physics world below is built exactly
   // once (see the `[]` dependency array), and re-running all of that just
   // because the parent passed a fresh inline callback would tear down and
@@ -391,12 +430,15 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
     const svg = svgRef.current;
     if (!svg) return;
 
+    const knockoutLayer = knockoutRef.current;
+
     const setViewport = () => {
       const height = Math.max(document.documentElement.scrollHeight, window.innerHeight);
       svg.setAttribute("width", String(window.innerWidth));
       svg.setAttribute("height", String(height));
       svg.setAttribute("viewBox", `0 0 ${window.innerWidth} ${height}`);
       svg.style.height = `${height}px`;
+      if (knockoutLayer) knockoutLayer.style.height = `${height}px`;
     };
     setViewport();
 
@@ -467,6 +509,12 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
     const handleResize = () => {
       setViewport();
       buildWalls();
+      // Tailwind's responsive breakpoints can change the knockout targets'
+      // font-size/position (see Hero.tsx's sm:/lg: classes), so their
+      // measured box needs a fresh read too — knockoutTargets is populated
+      // further down, but this only ever runs from the listener below,
+      // never synchronously during setup.
+      for (const kt of knockoutTargets) layoutKnockoutTarget(kt);
     };
     window.addEventListener("resize", handleResize);
 
@@ -1144,6 +1192,106 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       }
     });
 
+    // Live white "knockout" copies of every element tagged data-shape-knockout
+    // (see Hero.tsx) — one plain HTML clone per (target × shape) pair,
+    // stacked exactly on top of the target and each independently clipped
+    // every frame (see the tick loop) to that one shape's current
+    // silhouette. Clip-path is boolean (in/out), not a color blend, so this
+    // is the only way to get a *specific* white rather than each shape's own
+    // difference-inverse — see the intro comment. Plain HTML rather than
+    // SVG so it can just copy the target's own computed font/text, which
+    // keeps it in sync with responsive breakpoints and language changes for
+    // free (a MutationObserver on the target refreshes the text if it
+    // changes; a resize remeasures position/size/font — see handleResize).
+    interface KnockoutTarget {
+      target: HTMLElement;
+      wrap: HTMLDivElement;
+      clipDivs: HTMLDivElement[];
+      observer: MutationObserver;
+      // The wrap's own document-space top-left — clip-path coordinates for
+      // its clipDivs (see the tick loop) are relative to this, not the
+      // viewport, and it only needs recomputing on resize (see
+      // handleResize), same as the plate/walls: normal document-flow
+      // content doesn't move when the page merely scrolls.
+      originX: number;
+      originY: number;
+    }
+    const knockoutTargets: KnockoutTarget[] = [];
+
+    function layoutKnockoutTarget(kt: KnockoutTarget) {
+      const rect = kt.target.getBoundingClientRect();
+      const left = rect.left + window.scrollX;
+      const top = rect.top + window.scrollY;
+      kt.originX = left;
+      kt.originY = top;
+      kt.wrap.style.left = `${left}px`;
+      kt.wrap.style.top = `${top}px`;
+      // A couple of px of slack on the width — the target's own box is
+      // shrink-to-fit around its text (its flex parent uses items-center,
+      // not stretch), so it's already the exact width its own line(s) need;
+      // a hairline sub-pixel rounding difference between that and this
+      // synthetic copy's own layout is enough to tip a would-be single line
+      // into wrapping early. Same reasoning both text-align:center (so the
+      // extra width doesn't visibly shift anything) and normal white-space
+      // (so it still wraps the same way the real element does on a narrow
+      // viewport, just without that hair-trigger edge).
+      kt.wrap.style.width = `${rect.width + 4}px`;
+      kt.wrap.style.height = `${rect.height}px`;
+      kt.wrap.style.overflow = "hidden";
+      const cs = getComputedStyle(kt.target);
+      kt.wrap.style.fontFamily = cs.fontFamily;
+      kt.wrap.style.fontSize = cs.fontSize;
+      kt.wrap.style.fontWeight = cs.fontWeight;
+      kt.wrap.style.letterSpacing = cs.letterSpacing;
+      kt.wrap.style.textTransform = cs.textTransform;
+      kt.wrap.style.lineHeight = cs.lineHeight;
+      kt.wrap.style.textAlign = cs.textAlign;
+      kt.wrap.style.whiteSpace = cs.whiteSpace === "nowrap" ? "nowrap" : "normal";
+    }
+
+    function syncKnockoutText(kt: KnockoutTarget) {
+      const text = kt.target.textContent ?? "";
+      for (const clipDiv of kt.clipDivs) clipDiv.textContent = text;
+    }
+
+    if (knockoutLayer) {
+      const targets = Array.from(document.querySelectorAll<HTMLElement>(KNOCKOUT_SELECTOR));
+      for (const target of targets) {
+        const wrap = document.createElement("div");
+        wrap.style.position = "absolute";
+        wrap.style.display = "flex";
+        wrap.style.alignItems = "center";
+        wrap.style.justifyContent = "center";
+        wrap.style.color = "#ffffff";
+        knockoutLayer.appendChild(wrap);
+
+        const clipDivs = bodies.map(() => {
+          const clipDiv = document.createElement("div");
+          clipDiv.style.position = "absolute";
+          clipDiv.style.inset = "0";
+          clipDiv.style.display = "flex";
+          clipDiv.style.alignItems = "center";
+          clipDiv.style.justifyContent = "center";
+          clipDiv.style.clipPath = "circle(0px at 0px 0px)"; // nothing showing until the first tick
+          wrap.appendChild(clipDiv);
+          return clipDiv;
+        });
+
+        const kt: KnockoutTarget = {
+          target,
+          wrap,
+          clipDivs,
+          observer: new MutationObserver(() => syncKnockoutText(kt)),
+          originX: 0,
+          originY: 0,
+        };
+        layoutKnockoutTarget(kt);
+        syncKnockoutText(kt);
+        kt.observer.observe(target, { characterData: true, childList: true, subtree: true });
+        knockoutTargets.push(kt);
+      }
+    }
+
     // The dramatic reveal: the moment a labeled shape actually touches the
     // ground (a real physics collision, not just "gravity is on now" —
     // that fires the instant it's still mid-air near the top of its
@@ -1592,6 +1740,9 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
           continue;
         }
         elements[i].setAttribute("transform", transform);
+        for (const kt of knockoutTargets) {
+          kt.clipDivs[i].style.clipPath = shapeClipPath(specs[i], b.position.x, b.position.y, b.angle, kt.originX, kt.originY);
+        }
       }
 
       frameId = requestAnimationFrame(tick);
@@ -1614,9 +1765,21 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       glowLayer.remove();
       shapeLayer.remove();
       labelLayer.remove();
+      for (const kt of knockoutTargets) {
+        kt.observer.disconnect();
+        kt.wrap.remove();
+      }
       if (document.body.style.cursor === "pointer") document.body.style.cursor = "";
     };
   }, []);
 
-  return <svg ref={svgRef} aria-hidden className="pointer-events-none absolute inset-x-0 top-0 z-20 w-full" />;
+  return (
+    <>
+      <svg ref={svgRef} aria-hidden className="pointer-events-none absolute inset-x-0 top-0 z-20 w-full" />
+      {/* The white knockout copies (see the setup effect above) — above the
+          shapes themselves so a shape passing over data-shape-knockout text
+          really does show as poking a white copy of it through. */}
+      <div ref={knockoutRef} aria-hidden className="pointer-events-none absolute inset-x-0 top-0 z-[25] w-full" />
+    </>
+  );
 }
