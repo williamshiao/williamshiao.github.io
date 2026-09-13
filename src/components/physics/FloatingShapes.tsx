@@ -1518,7 +1518,11 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       });
     }
 
-    function beginShrink() {
+    // onDone (used by handlePointerDown below) lets a click on a *different*
+    // pageId shape swap panels directly — close, then immediately open the
+    // new one — instead of forcing a click-to-close and a separate click-
+    // to-open.
+    function beginShrink(onDone?: () => void) {
       const ps = panelState;
       if (!ps) return;
       ps.rectEl.style.fill = ps.spec.color;
@@ -1539,6 +1543,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
           labelElements[ps.index]!.style.opacity = "1";
         }
         panelState = null;
+        onDone?.();
       });
     }
 
@@ -1547,7 +1552,22 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       if (panelState) {
         const target = e.target as Element | null;
         if (target?.closest("[data-panel-overlay]")) return; // a click inside the content itself
-        beginShrink();
+        // A click that lands on a *different* pageId shape (the open
+        // panel's own body has been shoved elsewhere/shrunk to make room,
+        // so plenty of the board is still clickable around it) swaps
+        // straight to that one instead of requiring a separate close-then-
+        // reopen — see beginShrink's onDone.
+        const openIndex = panelState.index;
+        const docX = e.clientX + window.scrollX;
+        const docY = e.clientY + window.scrollY;
+        const hits = Query.point(bodies, { x: docX, y: docY });
+        const hitIndex = hits.length > 0 ? bodies.indexOf(hits[0]) : -1;
+        const hitSpec = hitIndex >= 0 ? specs[hitIndex] : null;
+        if (hitSpec?.pageId && hitIndex !== openIndex) {
+          beginShrink(() => beginExpand(hitIndex));
+        } else {
+          beginShrink();
+        }
         return;
       }
       if (!gravityEngaged) return; // only clickable once settled, same as hover
