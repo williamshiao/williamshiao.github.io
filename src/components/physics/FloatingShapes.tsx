@@ -52,6 +52,16 @@ import { createDittoNodes, stepDittoBlob, appendDittoFace, type DittoBlobState }
  * index.css redefines, so it repaints the whole site without any
  * component needing to know night mode exists.
  *
+ * Every shape (except the switch, which reads as UI chrome rather than a
+ * toy) also emits a soft blurred glow in its own color, on a separate
+ * layer *behind* the solid shapes. Glows use `mix-blend-mode:
+ * plus-lighter` — true additive light mixing — inside a parent with
+ * `isolation: isolate`, so two overlapping glows blend into each other
+ * (like colored light) rather than one just covering the other, while
+ * the flattened result still composites normally against the page behind
+ * it. No shaders/canvas needed: SVG filters + CSS blend modes are
+ * GPU-accelerated in every modern browser and this is only ~11 glows.
+ *
  * Matter.js (MIT) rather than custom code: rigid-body elastic collision
  * among several bodies is its home turf. Position/size/color are generated
  * fresh every load (see ./shapes) rather than fixed.
@@ -91,6 +101,14 @@ const SETTLE_FRICTION = 0.06;
 const SETTLE_FRICTION_AIR = 0.02;
 
 const HOVER_FILTER = "brightness(0.72)";
+
+// Every shape's soft color glow — see the intro comment for how the
+// overlap-blending actually works. Bigger shapes get a wider blur so the
+// glow still reads proportionally at that scale.
+const GLOW_SCALE = 1.45;
+const GLOW_OPACITY = 0.32;
+const GLOW_BLUR_SMALL = 7;
+const GLOW_BLUR_BIG = 15;
 
 // One wheel notch/flick snaps the whole way to the other section — smooth,
 // not instant, and not a fast snap either.
@@ -189,6 +207,52 @@ function createShapeElement(spec: ShapeSpec): SVGGraphicsElement {
   el.setAttribute("points", points);
   el.setAttribute("fill", spec.color);
   return el;
+}
+
+/** A blurred, enlarged, translucent silhouette in the shape's own color —
+ * see the intro comment for the blend-mode trick that makes overlapping
+ * glows mix rather than just stack. Ditto draws as a plain circle here
+ * (its actual body is a circle too — see createShapeBody — the soft-body
+ * skin is a purely visual layer on top, no need to chase its wobble for
+ * something this soft-edged anyway). */
+function createGlowElement(spec: ShapeSpec, filterId: string): SVGGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const g = document.createElementNS(ns, "g") as SVGGElement;
+  g.setAttribute("filter", `url(#${filterId})`);
+  g.setAttribute("opacity", String(GLOW_OPACITY));
+  g.style.mixBlendMode = "plus-lighter";
+
+  if (spec.kind === "rect") {
+    const w = spec.size * GLOW_SCALE;
+    const h = (spec.size2 ?? spec.size) * GLOW_SCALE;
+    const el = document.createElementNS(ns, "rect");
+    el.setAttribute("x", String(-w));
+    el.setAttribute("y", String(-h));
+    el.setAttribute("width", String(w * 2));
+    el.setAttribute("height", String(h * 2));
+    el.setAttribute("rx", String(Math.min(w, h) * 0.35));
+    el.setAttribute("fill", spec.color);
+    g.appendChild(el);
+    return g;
+  }
+  if (spec.kind === "triangle") {
+    const el = document.createElementNS(ns, "polygon");
+    el.setAttribute(
+      "points",
+      regularPolygonVertices(3, spec.size * GLOW_SCALE)
+        .map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`)
+        .join(" "),
+    );
+    el.setAttribute("fill", spec.color);
+    g.appendChild(el);
+    return g;
+  }
+  // circle + ditto
+  const el = document.createElementNS(ns, "circle");
+  el.setAttribute("r", String(spec.size * GLOW_SCALE));
+  el.setAttribute("fill", spec.color);
+  g.appendChild(el);
+  return g;
 }
 
 interface FloatingShapesProps {
@@ -305,12 +369,42 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
     const plateRect = getDocRect(PLATE_SELECTOR);
     const shapes = generateShapes(SMALL_SHAPE_COUNT, BIG_SHAPE_COUNT);
     const ns = "http://www.w3.org/2000/svg";
+
+    function makeBlurFilter(id: string, stdDeviation: number): SVGFilterElement {
+      const filter = document.createElementNS(ns, "filter") as unknown as SVGFilterElement;
+      filter.setAttribute("id", id);
+      // Generous margin so the blur isn't clipped to the element's own
+      // tight bounding box, which would cut it off with a hard edge.
+      filter.setAttribute("x", "-150%");
+      filter.setAttribute("y", "-150%");
+      filter.setAttribute("width", "400%");
+      filter.setAttribute("height", "400%");
+      const blur = document.createElementNS(ns, "feGaussianBlur");
+      blur.setAttribute("stdDeviation", String(stdDeviation));
+      filter.appendChild(blur);
+      return filter;
+    }
+    const defs = document.createElementNS(ns, "defs");
+    defs.appendChild(makeBlurFilter("glow-blur-small", GLOW_BLUR_SMALL));
+    defs.appendChild(makeBlurFilter("glow-blur-big", GLOW_BLUR_BIG));
+    svg.appendChild(defs);
+
+    // Glows live behind the solid shapes, in their own isolated stacking
+    // context — see the intro comment for why that's what makes
+    // overlapping glows blend into each other instead of just stacking.
+    const glowLayer = document.createElementNS(ns, "g");
+    glowLayer.style.isolation = "isolate";
+    svg.appendChild(glowLayer);
+
     const shapeLayer = document.createElementNS(ns, "g");
     svg.appendChild(shapeLayer);
 
     const bodies: Matter.Body[] = [];
     const elements: SVGGElement[] = [];
     const specs: ShapeSpec[] = [];
+    // Parallel to the above; null for the switch, which skips the glow
+    // entirely (see the intro comment).
+    const glowElements: (SVGGElement | null)[] = [];
 
     // Ditto gets a real rigid circle body too (see createShapeBody) so it
     // collides with everything normally, but its *visual* is a soft-body
@@ -367,6 +461,10 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       specs.push(spec);
       Composite.add(engine.world, body);
 
+      const glow = createGlowElement(spec, spec.interactive ? "glow-blur-big" : "glow-blur-small");
+      glowLayer.appendChild(glow);
+      glowElements.push(glow);
+
       const g = document.createElementNS(ns, "g") as SVGGElement;
       g.style.transition = "filter 0.15s ease";
       g.appendChild(createShapeElement(spec));
@@ -381,6 +479,10 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       bodies.push(body);
       specs.push(spec);
       Composite.add(engine.world, body);
+
+      const glow = createGlowElement(spec, "glow-blur-small");
+      glowLayer.appendChild(glow);
+      glowElements.push(glow);
 
       const g = document.createElementNS(ns, "g") as SVGGElement;
       const pathEl = document.createElementNS(ns, "path") as SVGPathElement;
@@ -410,6 +512,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       // it should never leave its spawn angle.
       bodies.push(body);
       specs.push(spec);
+      glowElements.push(null); // no glow — reads as UI chrome, not a toy
       Composite.add(engine.world, body);
 
       const hw = spec.size;
@@ -709,6 +812,8 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       rectEl.setAttribute("fill", spec.color);
       rectEl.style.transition = "fill 0.35s ease";
       elements[index].replaceChildren(rectEl);
+      // A glowing UI panel would read as a bug, not a feature.
+      if (glowElements[index]) glowElements[index]!.style.display = "none";
 
       panelState = { index, spec, rectEl, originX: x, originY: y, originHw: hw, originHh: hh, hw, hh, x, y };
 
@@ -736,6 +841,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
         const restored = createShapeBody(ps.spec, ps.x, ps.y);
         replaceBodyAt(ps.index, restored);
         elements[ps.index].replaceChildren(createShapeElement(ps.spec));
+        if (glowElements[ps.index]) glowElements[ps.index]!.style.display = "";
         panelState = null;
       });
     }
@@ -870,6 +976,8 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
 
       for (let i = 0; i < bodies.length; i++) {
         const b = bodies[i];
+        const transform = `translate(${b.position.x.toFixed(2)} ${b.position.y.toFixed(2)}) rotate(${(b.angle * (180 / Math.PI)).toFixed(2)})`;
+        glowElements[i]?.setAttribute("transform", transform);
         if (dittoBlob && i === dittoIndex) {
           // The blob's path/face are drawn in absolute coordinates and
           // updated directly (see stepDittoBlob) — no <g> transform here,
@@ -877,7 +985,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
           stepDittoBlob(dittoBlob, b.position.x, b.position.y, b.angle);
           continue;
         }
-        elements[i].setAttribute("transform", `translate(${b.position.x.toFixed(2)} ${b.position.y.toFixed(2)}) rotate(${(b.angle * (180 / Math.PI)).toFixed(2)})`);
+        elements[i].setAttribute("transform", transform);
       }
 
       frameId = requestAnimationFrame(tick);
@@ -895,6 +1003,8 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       window.removeEventListener("wheel", handleWheel);
       Composite.clear(engine.world, false);
       Engine.clear(engine);
+      defs.remove();
+      glowLayer.remove();
       shapeLayer.remove();
     };
   }, []);
