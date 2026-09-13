@@ -226,6 +226,15 @@ const LAUNCH_SPEED_MAX = 16;
 // that out only makes the whole timeline feel sluggish to navigate.
 const PANEL_OPEN_DURATION_MS = 650;
 const PANEL_CLOSE_DURATION_MS = 260;
+// How long a page-to-page swap (see swapPanelTo) waits after starting the
+// close before starting the open — the two run *mostly* concurrently
+// rather than one strictly after the other, but not starting in the very
+// same instant gives the closing shape's growing/shrinking static collider
+// a head start clearing its own footprint before the next one starts
+// muscling into the same space, which is what actually caused the jank a
+// truly simultaneous start produced (two rapidly resizing static bodies
+// shoving the same floating neighbors around from two directions at once).
+const PANEL_SWAP_OPEN_DELAY_MS = 120;
 const PANEL_MAX_WIDTH = 760;
 const PANEL_MAX_HEIGHT = 640;
 const PANEL_RADIUS = 32;
@@ -1278,6 +1287,10 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
     // landing mid-chain, the same way `transitioning` blocks another
     // hero<->bottom snap mid-animation.
     let panelNavigating = false;
+    // The pending "start the open half" timer a swap schedules (see
+    // swapPanelTo) — tracked so unmounting mid-swap can cancel it instead
+    // of it firing into a torn-down world.
+    let swapOpenTimer: ReturnType<typeof setTimeout> | null = null;
 
     const internshipsIndex = specs.findIndex((s) => s.pageId === "internships");
     let internshipsAutoOpened = false;
@@ -1412,8 +1425,14 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
     // grows in place into a big rounded panel, shoving every other shape
     // out of the way as it does (it's a real, solid collider throughout —
     // see animatePanelTo), then hands off to the caller to render that
-    // page's content on top. `panelState` being non-null is also what
-    // blocks scrolling and other-shape hover/click while a panel is open.
+    // page's content on top. `panelState` tracks whichever shape is
+    // *currently* a panel (open, or still mid-expand) — non-null is what
+    // blocks scrolling and other-shape hover/click. It's cleared the
+    // instant a shrink *starts*, not once it finishes (see beginShrink), so
+    // that a page-to-page swap's matching expand is free to begin growing
+    // the next shape while the old one is still animating back down —
+    // see swapPanelTo/PANEL_SWAP_OPEN_DELAY_MS for why they don't start in
+    // the very same instant.
     interface PanelState {
       index: number;
       spec: ShapeSpec;
@@ -1430,7 +1449,12 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       y: number;
     }
     let panelState: PanelState | null = null;
-    let panelAnimFrame: number | null = null;
+    // animatePanelTo can have more than one animation in flight at once now
+    // (a shrink and an expand overlapping mid-swap — see swapPanelTo), so
+    // unlike most of this file's single-animation-at-a-time state, this is
+    // a set of every currently-scheduled frame rather than one shared
+    // handle; the cleanup effect just cancels whatever's still in it.
+    const activePanelAnimFrames = new Set<number>();
 
     function halfExtentsOf(spec: ShapeSpec): { hw: number; hh: number } {
       if (spec.kind === "rect") return { hw: spec.size, hh: spec.size2 ?? spec.size };
@@ -1445,27 +1469,31 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       Composite.add(engine.world, next);
     }
 
-    // Drives both expand and shrink: eases the panel body's size/position
-    // from panelState's current live values to the given target over
+    // Drives both expand and shrink: eases the given panel state's
+    // size/position from its current live values to the given target over
     // `durationMs` (see PANEL_OPEN_DURATION_MS/PANEL_CLOSE_DURATION_MS),
     // scaling the real physics body every frame (so it keeps shoving other
     // bodies out of its growing footprint) and updating the <rect>'s
     // attributes to match — position/rotation are already handled every
     // frame by the main tick() loop below, since bodies[index] is this
-    // same body.
-    function animatePanelTo(toHw: number, toHh: number, toX: number, toY: number, durationMs: number, onDone?: () => void) {
-      const ps = panelState;
-      if (!ps) return;
+    // same body. Takes `ps` explicitly (rather than reading the live
+    // `panelState`) so a shrink can still finish animating its own shape
+    // after `panelState` has already moved on to the next one (see
+    // beginShrink/swapPanelTo) — two of these can genuinely be running at
+    // once, each driving a different shape, hence activePanelAnimFrames
+    // being a set rather than one shared handle.
+    function animatePanelTo(ps: PanelState, toHw: number, toHh: number, toX: number, toY: number, durationMs: number, onDone?: () => void) {
       const body = bodies[ps.index];
       const fromHw = ps.hw;
       const fromHh = ps.hh;
       const fromX = ps.x;
       const fromY = ps.y;
-      if (panelAnimFrame !== null) cancelAnimationFrame(panelAnimFrame);
       const startTime = performance.now();
       let prevHw = fromHw;
       let prevHh = fromHh;
+      let frame: number;
       const step = (now: number) => {
+        activePanelAnimFrames.delete(frame);
         const t = Math.min(1, (now - startTime) / durationMs);
         const eased = easeInOutCubic(t);
         const hw = fromHw + (toHw - fromHw) * eased;
@@ -1491,13 +1519,14 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
         ps.rectEl.setAttribute("rx", String(Math.min(hw, hh, PANEL_RADIUS)));
 
         if (t < 1) {
-          panelAnimFrame = requestAnimationFrame(step);
+          frame = requestAnimationFrame(step);
+          activePanelAnimFrames.add(frame);
         } else {
-          panelAnimFrame = null;
           onDone?.();
         }
       };
-      panelAnimFrame = requestAnimationFrame(step);
+      frame = requestAnimationFrame(step);
+      activePanelAnimFrames.add(frame);
     }
 
     function beginExpand(index: number) {
@@ -1547,14 +1576,15 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
         labelElements[index]!.style.opacity = "0";
       }
 
-      panelState = { index, spec, rectEl, originX: x, originY: y, originHw: hw, originHh: hh, hw, hh, x, y };
+      const ps: PanelState = { index, spec, rectEl, originX: x, originY: y, originHw: hw, originHh: hh, hw, hh, x, y };
+      panelState = ps;
 
       const targetHw = Math.min(window.innerWidth * 0.43, PANEL_MAX_WIDTH / 2);
       const targetHh = Math.min(window.innerHeight * 0.39, PANEL_MAX_HEIGHT / 2);
       const targetX = window.scrollX + window.innerWidth / 2;
       const targetY = window.scrollY + window.innerHeight / 2;
 
-      animatePanelTo(targetHw, targetHh, targetX, targetY, PANEL_OPEN_DURATION_MS, () => {
+      animatePanelTo(ps, targetHw, targetHh, targetX, targetY, PANEL_OPEN_DURATION_MS, () => {
         rectEl.style.fill = "var(--color-surface)";
         rectEl.setAttribute("stroke", spec.color);
         rectEl.setAttribute("stroke-width", "3");
@@ -1562,37 +1592,65 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       });
     }
 
-    // onDone (used by handlePointerDown below) lets a click on a *different*
-    // pageId shape swap panels directly — close, then immediately open the
-    // new one — instead of forcing a click-to-close and a separate click-
-    // to-open.
+    // onDone (used by goToHero below) runs once the shrink-back-down
+    // finishes. `panelState` itself is cleared right away, *before* that
+    // animation even starts — not once it finishes — so that a page-to-
+    // page swap's matching beginExpand (see swapPanelTo) is free to start
+    // growing the next shape while this one is still animating back down,
+    // rather than having to wait its full duration out first.
     function beginShrink(onDone?: () => void) {
       const ps = panelState;
       if (!ps) return;
+      panelState = null;
       ps.rectEl.style.fill = ps.spec.color;
       ps.rectEl.removeAttribute("stroke");
       onClosePanelRef.current?.();
 
-      animatePanelTo(ps.originHw, ps.originHh, ps.originX, ps.originY, PANEL_CLOSE_DURATION_MS, () => {
+      animatePanelTo(ps, ps.originHw, ps.originHh, ps.originX, ps.originY, PANEL_CLOSE_DURATION_MS, () => {
         const restored = createShapeBody(ps.spec, ps.x, ps.y);
         replaceBodyAt(ps.index, restored);
         elements[ps.index].replaceChildren(createShapeElement(ps.spec));
         if (glowElements[ps.index]) glowElements[ps.index]!.style.display = "";
-        // Still settled at this point (gravityEngaged never toggled off
-        // during an expand/shrink) and it already played its landing
-        // reveal well before it was ever clicked, so just show it again
-        // quickly rather than replaying the slow version.
-        if (labelElements[ps.index]) {
+        // Only show the label again if we're still actually settled on
+        // the bottom page — closing a panel can now also be the first
+        // half of heading all the way back to the hero (see goToHero),
+        // and a label has no business being visible there: every label
+        // must be hidden on the landing page, no exceptions.
+        if (gravityEngaged && labelElements[ps.index]) {
           labelElements[ps.index]!.style.transitionDuration = `${LABEL_HIDE_MS}ms`;
           labelElements[ps.index]!.style.opacity = "1";
         }
-        panelState = null;
         onDone?.();
       });
     }
 
+    // Swaps straight from whatever's currently open (if anything) to
+    // `shapeIndex`'s page — used by both a click on a different pageId
+    // shape and a page-to-page wheel step (see goToPageShape). The close
+    // and open overlap rather than running one after the other: the close
+    // starts immediately, and the open follows after a short, deliberate
+    // beat (PANEL_SWAP_OPEN_DELAY_MS) rather than in the very same instant
+    // — see its comment for why.
+    function swapPanelTo(shapeIndex: number) {
+      if (panelState) {
+        panelNavigating = true;
+        beginShrink();
+        swapOpenTimer = setTimeout(() => {
+          swapOpenTimer = null;
+          panelNavigating = false;
+          beginExpand(shapeIndex);
+        }, PANEL_SWAP_OPEN_DELAY_MS);
+      } else {
+        beginExpand(shapeIndex);
+      }
+    }
+
     function handlePointerDown(e: PointerEvent) {
-      if (transitioning) return;
+      // panelNavigating covers the whole close-then-open window of a swap
+      // (see swapPanelTo) — panelState alone isn't enough here, since it's
+      // cleared the instant the close half starts, well before the swap
+      // actually finishes (see beginShrink).
+      if (transitioning || panelNavigating) return;
       if (panelState) {
         const target = e.target as Element | null;
         if (target?.closest("[data-panel-overlay]")) return; // a click inside the content itself
@@ -1600,7 +1658,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
         // panel's own body has been shoved elsewhere/shrunk to make room,
         // so plenty of the board is still clickable around it) swaps
         // straight to that one instead of requiring a separate close-then-
-        // reopen — see beginShrink's onDone.
+        // reopen — see swapPanelTo.
         const openIndex = panelState.index;
         const docX = e.clientX + window.scrollX;
         const docY = e.clientY + window.scrollY;
@@ -1614,7 +1672,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
           // it last was.
           const nav = pageShapeIndices.indexOf(hitIndex) + 1;
           if (nav > 0) pageIndex = nav;
-          beginShrink(() => beginExpand(hitIndex));
+          swapPanelTo(hitIndex);
         } else {
           beginShrink();
         }
@@ -1685,15 +1743,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       const shapeIndex = pageShapeIndices[nav - 1];
       if (shapeIndex === undefined) return;
       pageIndex = nav;
-      if (panelState) {
-        panelNavigating = true;
-        beginShrink(() => {
-          panelNavigating = false;
-          beginExpand(shapeIndex);
-        });
-      } else {
-        beginExpand(shapeIndex);
-      }
+      swapPanelTo(shapeIndex);
     }
 
     // The hero end of the timeline: closes whatever page is open (if any),
@@ -1835,7 +1885,9 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       if (scrollAnimFrame !== null) cancelAnimationFrame(scrollAnimFrame);
       if (cooldownTimer !== null) clearTimeout(cooldownTimer);
       if (autoExpandTimer !== null) clearTimeout(autoExpandTimer);
-      if (panelAnimFrame !== null) cancelAnimationFrame(panelAnimFrame);
+      if (swapOpenTimer !== null) clearTimeout(swapOpenTimer);
+      for (const frame of activePanelAnimFrames) cancelAnimationFrame(frame);
+      activePanelAnimFrames.clear();
       document.removeEventListener("pointermove", handlePointerMove);
       document.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("resize", handleResize);
