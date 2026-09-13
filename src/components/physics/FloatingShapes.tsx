@@ -53,7 +53,10 @@ import { generateShapes, type ShapeSpec } from "./shapes";
 const { Engine, Bodies, Body, Composite, Query } = Matter;
 
 const PLATE_SELECTOR = "[data-plate-bounds]";
-const SMALL_SHAPE_COUNT = 12;
+// Fewer small shapes than before — with a dozen of them bouncing around in
+// a confined space, collisions kept handing velocity back and forth and
+// the whole board read as too fast/chaotic even at the same base speed.
+const SMALL_SHAPE_COUNT = 7;
 const BIG_SHAPE_COUNT = 5;
 const WALL_THICKNESS = 100; // generous, so fast bodies can't tunnel through on one big step
 const CURSOR_RADIUS = 14;
@@ -129,7 +132,7 @@ function createShapeBody(spec: ShapeSpec, x: number, y: number): Matter.Body {
     frictionStatic: 0,
     angle: spec.rotation ?? 0,
   };
-  if (spec.kind === "circle") {
+  if (spec.kind === "circle" || spec.kind === "ditto") {
     return Bodies.circle(x, y, spec.size, common);
   }
   if (spec.kind === "rect") {
@@ -150,6 +153,46 @@ function createShapeElement(spec: ShapeSpec): SVGGraphicsElement {
     el.setAttribute("r", String(spec.size));
     el.setAttribute("fill", spec.color);
     return el;
+  }
+  if (spec.kind === "ditto") {
+    // A round blob with Ditto's classic asymmetric face — one oval eye,
+    // one flat line eye, a simple wavy mouth. Spins with the body just
+    // like any other shape, which only makes it more fun to watch.
+    const r = spec.size;
+    const g = document.createElementNS(ns, "g");
+
+    const body = document.createElementNS(ns, "circle");
+    body.setAttribute("r", String(r));
+    body.setAttribute("fill", spec.color);
+    g.appendChild(body);
+
+    const leftEye = document.createElementNS(ns, "ellipse");
+    leftEye.setAttribute("cx", String(-r * 0.32));
+    leftEye.setAttribute("cy", String(-r * 0.15));
+    leftEye.setAttribute("rx", String(r * 0.12));
+    leftEye.setAttribute("ry", String(r * 0.16));
+    leftEye.setAttribute("fill", "#241f2e");
+    g.appendChild(leftEye);
+
+    const rightEye = document.createElementNS(ns, "line");
+    rightEye.setAttribute("x1", String(r * 0.16));
+    rightEye.setAttribute("y1", String(-r * 0.15));
+    rightEye.setAttribute("x2", String(r * 0.46));
+    rightEye.setAttribute("y2", String(-r * 0.15));
+    rightEye.setAttribute("stroke", "#241f2e");
+    rightEye.setAttribute("stroke-width", String(r * 0.09));
+    rightEye.setAttribute("stroke-linecap", "round");
+    g.appendChild(rightEye);
+
+    const mouth = document.createElementNS(ns, "path");
+    mouth.setAttribute("d", `M ${-r * 0.28} ${r * 0.32} Q 0 ${r * 0.5} ${r * 0.28} ${r * 0.32}`);
+    mouth.setAttribute("fill", "none");
+    mouth.setAttribute("stroke", "#241f2e");
+    mouth.setAttribute("stroke-width", String(r * 0.08));
+    mouth.setAttribute("stroke-linecap", "round");
+    g.appendChild(mouth);
+
+    return g;
   }
   if (spec.kind === "rect") {
     const el = document.createElementNS(ns, "rect");

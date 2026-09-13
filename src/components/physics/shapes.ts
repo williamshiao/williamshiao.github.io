@@ -12,7 +12,7 @@
  * file again.
  */
 
-export type ShapeKind = "circle" | "rect" | "triangle";
+export type ShapeKind = "circle" | "rect" | "triangle" | "ditto";
 
 export interface ShapeSpec {
   id: string;
@@ -103,5 +103,23 @@ export function generateShapes(smallCount: number, bigCount: number): ShapeSpec[
   // one generated rather than picked by color, since color is randomized
   // fresh every load and isn't a stable enough hook to key off of.
   if (big.length > 0) big[0].pageId = "internships";
+  // One guaranteed Ditto among the small tier, just for fun — always
+  // present (not a random chance kind), always in the first small slot.
+  if (small.length > 0) small[0] = makeDittoShape();
   return [...small, ...big];
+}
+
+/**
+ * A little easter egg: one of the small shapes is always Ditto itself,
+ * rendered in FloatingShapes as a simple round blob with the character's
+ * classic asymmetric face (one oval eye, one flat line eye, a wavy
+ * mouth). Physically it's treated as a plain circle — no soft-body
+ * mesh/morphing this time, that whole approach was banked earlier for
+ * being too unstable, and it's not needed for something this small.
+ */
+export function makeDittoShape(): ShapeSpec {
+  const [min, max] = SMALL_SIZE.circle;
+  // A touch bigger than a typical small shape so it actually reads as
+  // "someone drew a face on this" rather than disappearing into the mix.
+  return { id: "ditto", kind: "ditto", color: "#f0abfc", size: randomBetween(min, max) * 1.15, interactive: false };
 }
