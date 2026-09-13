@@ -62,6 +62,10 @@ import { createDittoNodes, stepDittoBlob, appendDittoFace, type DittoBlobState }
  * it. No shaders/canvas needed: SVG filters + CSS blend modes are
  * GPU-accelerated in every modern browser and this is only ~11 glows.
  *
+ * A third special shape — a small round push-button (see
+ * makeGlowButtonShape) — toggles that whole glow layer on/off, the same
+ * click path as the switch and the pageId panel.
+ *
  * Matter.js (MIT) rather than custom code: rigid-body elastic collision
  * among several bodies is its home turf. Position/size/color are generated
  * fresh every load (see ./shapes) rather than fixed.
@@ -160,17 +164,10 @@ function createShapeBody(spec: ShapeSpec, x: number, y: number): Matter.Body {
     frictionStatic: 0,
     angle: spec.rotation ?? 0,
   };
-  if (spec.kind === "circle" || spec.kind === "ditto") {
+  if (spec.kind === "circle" || spec.kind === "ditto" || spec.kind === "glow-button") {
     return Bodies.circle(x, y, spec.size, common);
   }
-  if (spec.kind === "switch") {
-    // Infinite inertia: collisions can still push it around and it still
-    // falls/bounces normally, but nothing can ever torque it into a spin
-    // — it needs to stay upright for "toggle up = light, down = dark" to
-    // keep reading correctly.
-    return Bodies.rectangle(x, y, spec.size * 2, (spec.size2 ?? spec.size) * 2, { ...common, inertia: Infinity });
-  }
-  if (spec.kind === "rect") {
+  if (spec.kind === "switch" || spec.kind === "rect") {
     return Bodies.rectangle(x, y, spec.size * 2, (spec.size2 ?? spec.size) * 2, {
       ...common,
       chamfer: { radius: Math.min(spec.size, spec.size2 ?? spec.size) * 0.35 },
@@ -452,6 +449,35 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       updateSwitchVisual();
     }
 
+    // Glow on/off, toggled by the push-button (see spawnGlowButton) —
+    // just hides the whole glowLayer rather than tearing down/rebuilding
+    // its contents, so turning it back on is instant.
+    let glowEnabled = (() => {
+      try {
+        return localStorage.getItem("ditto-glow-enabled") !== "false";
+      } catch {
+        return true;
+      }
+    })();
+    let glowButton: { capEl: SVGCircleElement } | null = null;
+    if (!glowEnabled) glowLayer.style.display = "none";
+
+    function updateGlowButtonVisual() {
+      if (!glowButton) return;
+      glowButton.capEl.setAttribute("fill", glowEnabled ? "#fb923c" : "#9ca3af");
+    }
+
+    function toggleGlow() {
+      glowEnabled = !glowEnabled;
+      glowLayer.style.display = glowEnabled ? "" : "none";
+      try {
+        localStorage.setItem("ditto-glow-enabled", String(glowEnabled));
+      } catch {
+        // Private browsing/storage disabled — same as night mode above.
+      }
+      updateGlowButtonVisual();
+    }
+
     // Adds one shape to every parallel array/the world/the SVG at once —
     // used for the initial spawn below (index i's specs/bodies/elements
     // always refer to the same shape, which the click-to-expand code
@@ -511,8 +537,11 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
     function spawnLightSwitch(spec: ShapeSpec, x: number, y: number, vx: number, vy: number) {
       const body = createShapeBody(spec, x, y);
       Body.setVelocity(body, { x: vx, y: vy });
-      // No angular velocity — see createShapeBody's infinite-inertia note,
-      // it should never leave its spawn angle.
+      // Tumbles and spins like any other shape now (it used to be pinned
+      // upright via infinite inertia so "up = light, down = dark" always
+      // read correctly, but that made it look rigid/out of place next to
+      // everything else — worth it for the visual consistency).
+      Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.04);
       bodies.push(body);
       specs.push(spec);
       glowElements.push(null); // no glow — reads as UI chrome, not a toy
@@ -592,6 +621,45 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
       updateSwitchVisual();
     }
 
+    // A round push-button — bezel + colored cap, like an arcade button —
+    // that toggles the glow layer on click (see toggleGlow). Same
+    // stencil-family outline treatment as the switch.
+    function spawnGlowButton(spec: ShapeSpec, x: number, y: number, vx: number, vy: number) {
+      const body = createShapeBody(spec, x, y);
+      Body.setVelocity(body, { x: vx, y: vy });
+      Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.04);
+      bodies.push(body);
+      specs.push(spec);
+      glowElements.push(null); // no glow — it's UI chrome, not a toy
+      Composite.add(engine.world, body);
+
+      const r = spec.size;
+      const line = "var(--color-ink)";
+      const strokeWidth = Math.max(1.5, r * 0.1);
+
+      const g = document.createElementNS(ns, "g") as SVGGElement;
+      g.style.transition = "filter 0.15s ease";
+
+      const bezel = document.createElementNS(ns, "circle");
+      bezel.setAttribute("r", String(r));
+      bezel.setAttribute("fill", spec.color);
+      bezel.setAttribute("stroke", line);
+      bezel.setAttribute("stroke-width", String(strokeWidth));
+      g.appendChild(bezel);
+
+      const capEl = document.createElementNS(ns, "circle") as SVGCircleElement;
+      capEl.setAttribute("r", String(r * 0.64));
+      capEl.setAttribute("stroke", line);
+      capEl.setAttribute("stroke-width", String(strokeWidth * 0.7));
+      g.appendChild(capEl);
+
+      shapeLayer.appendChild(g);
+      elements.push(g);
+
+      glowButton = { capEl };
+      updateGlowButtonVisual();
+    }
+
     shapes.forEach((spec, i) => {
       const cx = plateRect ? plateRect.left + plateRect.width / 2 : window.innerWidth / 2;
       const cy = plateRect ? plateRect.top + window.innerHeight / 2 : window.innerHeight / 2;
@@ -607,6 +675,8 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
         spawnDittoBlob(spec, x, y, vx, vy);
       } else if (spec.kind === "switch") {
         spawnLightSwitch(spec, x, y, vx, vy);
+      } else if (spec.kind === "glow-button") {
+        spawnGlowButton(spec, x, y, vx, vy);
       } else {
         spawnShape(spec, x, y, vx, vy);
       }
@@ -680,17 +750,12 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
     // them. They bounce off the top wall and each other from there, same
     // as freshly spawned ones.
     function launchShapesUpward() {
-      bodies.forEach((body, i) => {
+      for (const body of bodies) {
         const speed = LAUNCH_SPEED_MIN + Math.random() * (LAUNCH_SPEED_MAX - LAUNCH_SPEED_MIN);
         const sideways = (Math.random() - 0.5) * 8;
         Body.setVelocity(body, { x: sideways, y: -speed });
-        // The switch needs to stay upright (see createShapeBody) — an
-        // explicit setAngularVelocity would spin it anyway, since infinite
-        // inertia only blocks *collision*-induced torque, not this.
-        if (specs[i].kind !== "switch") {
-          Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.12);
-        }
-      });
+        Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.12);
+      }
     }
 
     // Click-to-expand: the one shape tagged with a pageId (see ./shapes)
@@ -867,6 +932,8 @@ export function FloatingShapes({ onOpenPanel, onClosePanel }: FloatingShapesProp
         beginExpand(hitIndex);
       } else if (specs[hitIndex].kind === "switch") {
         toggleNightMode();
+      } else if (specs[hitIndex].kind === "glow-button") {
+        toggleGlow();
       }
     }
     document.addEventListener("pointerdown", handlePointerDown);

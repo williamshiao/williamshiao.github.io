@@ -12,7 +12,7 @@
  * file again.
  */
 
-export type ShapeKind = "circle" | "rect" | "triangle" | "ditto" | "switch";
+export type ShapeKind = "circle" | "rect" | "triangle" | "ditto" | "switch" | "glow-button";
 
 export interface ShapeSpec {
   id: string;
@@ -109,6 +109,8 @@ export function generateShapes(smallCount: number, bigCount: number): ShapeSpec[
   // One guaranteed light switch too, in the second slot — see
   // FloatingShapes' toggleNightMode.
   if (small.length > 1) small[1] = makeLightSwitchShape();
+  // And a push-button that toggles the shape glow effect, in the third.
+  if (small.length > 2) small[2] = makeGlowButtonShape();
   return [...small, ...big];
 }
 
@@ -136,4 +138,16 @@ export function makeDittoShape(): ShapeSpec {
  */
 export function makeLightSwitchShape(): ShapeSpec {
   return { id: "light-switch", kind: "switch", color: "var(--color-surface)", size: 24, size2: 28, interactive: true };
+}
+
+/**
+ * A round push-button — bezel + a colored center cap, like an arcade/panic
+ * button — that toggles the shape glow effect on click (see
+ * FloatingShapes' toggleGlow/spawnGlowButton). Same "always present,
+ * fixed size" treatment as the switch, and for the same reason: `color`
+ * is the bezel's CSS-var fill, always matching the site's current
+ * surface tone.
+ */
+export function makeGlowButtonShape(): ShapeSpec {
+  return { id: "glow-button", kind: "glow-button", color: "var(--color-surface)", size: 24, interactive: true };
 }
