@@ -107,12 +107,20 @@ const FLOOR_MARGIN = 24;
 const MAX_FLOOR_STEP = 40;
 
 const GRAVITY_Y = 1;
-// Shapes are perfectly elastic/frictionless while floating; SETTLE_* apply
-// only while gravity is engaged, so they actually come to rest on the
-// floor instead of bouncing forever. Switching back reverts to these.
+// Shapes bounce elastically off everything while floating (collisions
+// never lose energy — ELASTIC_RESTITUTION/FRICTION), but a small amount
+// of air resistance still bleeds a little speed out of the system over
+// time. Without it, nothing ever removes energy: every bump off the
+// cursor or another shape just keeps adding up, and the whole board
+// gradually turns into a blur. This is deliberately much gentler than
+// Matter's own default (0.01) — enough to cap that runaway buildup
+// without ever visibly slowing shapes to a crawl on their own. SETTLE_*
+// apply only while gravity is engaged, so shapes actually come to rest
+// on the floor instead of bouncing forever; switching back reverts to
+// these.
 const ELASTIC_RESTITUTION = 1;
 const ELASTIC_FRICTION = 0;
-const ELASTIC_FRICTION_AIR = 0;
+const ELASTIC_FRICTION_AIR = 0.006;
 const SETTLE_RESTITUTION = 0.4;
 const SETTLE_FRICTION = 0.06;
 const SETTLE_FRICTION_AIR = 0.02;
@@ -171,9 +179,13 @@ function regularPolygonVertices(sides: number, radius: number, rotationOffset = 
 
 function createShapeBody(spec: ShapeSpec, x: number, y: number): Matter.Body {
   const common = {
-    restitution: 1,
-    friction: 0,
-    frictionAir: 0,
+    restitution: ELASTIC_RESTITUTION,
+    friction: ELASTIC_FRICTION,
+    // Every shape spawns into the zero-g section, so it should start with
+    // the elastic-mode drag rather than 0 — setGravityMode only re-applies
+    // this on an actual mode *change*, and a freshly spawned body hasn't
+    // been through one yet.
+    frictionAir: ELASTIC_FRICTION_AIR,
     frictionStatic: 0,
     angle: spec.rotation ?? 0,
   };
