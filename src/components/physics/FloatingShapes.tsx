@@ -27,6 +27,14 @@ import { generateShapes, type ShapeSpec } from "./shapes";
  * those darken on hover once settled, since they're the ones meant to
  * eventually double as real page navigation.
  *
+ * The page itself is only ever fully at the top or fully at the bottom —
+ * one wheel gesture snap-scrolls the whole way there (see the wheel
+ * listener below), rather than requiring continuous scrolling. Snapping
+ * back up to the zero-g section also relaunches every shape upward on the
+ * spot (see launchShapesUpward) so the "whimsical floating" feeling
+ * restarts immediately instead of shapes just sitting wherever gravity
+ * left them.
+ *
  * Matter.js (MIT) rather than custom code: rigid-body elastic collision
  * among several bodies is its home turf. Position/size/color are generated
  * fresh every load (see ./shapes) rather than fixed.
@@ -63,6 +71,22 @@ const SETTLE_FRICTION = 0.06;
 const SETTLE_FRICTION_AIR = 0.02;
 
 const HOVER_FILTER = "brightness(0.72)";
+
+// One wheel notch/flick snaps the whole way to the other section — smooth,
+// not instant, and not a fast snap either.
+const SNAP_DURATION_MS = 900;
+// Swallows the trailing inertial wheel events a trackpad keeps firing after
+// the finger lifts, so momentum from the gesture that just landed can't
+// immediately trigger another one.
+const SNAP_COOLDOWN_MS = 250;
+const WHEEL_DEADZONE = 4;
+// Upward relaunch speed range (px/frame) when snapping back to zero-g.
+const LAUNCH_SPEED_MIN = 9;
+const LAUNCH_SPEED_MAX = 16;
+
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
 
 function getDocRect(selector: string): DOMRect | null {
   const el = document.querySelector(selector);
@@ -269,10 +293,16 @@ export function FloatingShapes() {
     });
     Composite.add(engine.world, cursorBody);
 
-    // Which mode is active follows the *current* scroll position (checked
-    // every frame, see tick), not a one-way latch — scrolling back up
-    // reverses all of it.
+    // Which mode is active normally just follows the *current* scroll
+    // position (checked every frame, see tick) — not a one-way latch,
+    // scrolling back up reverses all of it. The snap-scroll handler below
+    // briefly overrides that with an explicit value instead (see
+    // manualGravityOverride) so re-entering zero-g and the upward launch
+    // happen in the same instant, rather than gravity staying on for the
+    // first few frames of the scroll-up animation and immediately
+    // flattening the launch.
     let hoveredIndex = -1;
+    let manualGravityOverride: boolean | null = null;
     function setGravityMode(enabled: boolean) {
       if (enabled === gravityEngaged) return;
       gravityEngaged = enabled;
@@ -309,10 +339,77 @@ export function FloatingShapes() {
     }
     document.addEventListener("pointermove", handlePointerMove);
 
+    // Sends every shape flying upward with a bit of random sideways
+    // scatter — restarts the "whimsical floating" feeling the instant you
+    // scroll back up, rather than leaving them wherever gravity settled
+    // them. They bounce off the top wall and each other from there, same
+    // as freshly spawned ones.
+    function launchShapesUpward() {
+      for (const body of bodies) {
+        const speed = LAUNCH_SPEED_MIN + Math.random() * (LAUNCH_SPEED_MAX - LAUNCH_SPEED_MIN);
+        const sideways = (Math.random() - 0.5) * 8;
+        Body.setVelocity(body, { x: sideways, y: -speed });
+        Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.12);
+      }
+    }
+
+    // Snap-scroll: the page is only ever fully docked at the top (zero-g
+    // hero) or fully at the bottom (gravity-settled) section — one wheel
+    // gesture animates the whole way there instead of requiring continuous
+    // scrolling. `transitioning` locks out further wheel input (including
+    // a trackpad's trailing inertial events, via SNAP_COOLDOWN_MS after
+    // landing) so one gesture can't double-trigger or get interrupted
+    // partway.
+    let atTop = window.scrollY < window.innerHeight / 2;
+    let transitioning = false;
+    let scrollAnimFrame: number | null = null;
+    let cooldownTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function animateScrollTo(targetY: number, onDone?: () => void) {
+      transitioning = true;
+      const startY = window.scrollY;
+      const distance = targetY - startY;
+      const startTime = performance.now();
+      const step = (now: number) => {
+        const t = Math.min(1, (now - startTime) / SNAP_DURATION_MS);
+        window.scrollTo(0, startY + distance * easeInOutCubic(t));
+        if (t < 1) {
+          scrollAnimFrame = requestAnimationFrame(step);
+        } else {
+          scrollAnimFrame = null;
+          onDone?.();
+          cooldownTimer = setTimeout(() => {
+            transitioning = false;
+            cooldownTimer = null;
+          }, SNAP_COOLDOWN_MS);
+        }
+      };
+      scrollAnimFrame = requestAnimationFrame(step);
+    }
+
+    function handleWheel(e: WheelEvent) {
+      e.preventDefault();
+      if (transitioning || Math.abs(e.deltaY) < WHEEL_DEADZONE) return;
+      if (e.deltaY > 0 && atTop) {
+        atTop = false;
+        animateScrollTo(window.innerHeight);
+      } else if (e.deltaY < 0 && !atTop) {
+        atTop = true;
+        manualGravityOverride = false;
+        launchShapesUpward();
+        animateScrollTo(0, () => {
+          manualGravityOverride = null;
+        });
+      }
+    }
+    window.addEventListener("wheel", handleWheel, { passive: false });
+
     const FRAME_MS = 1000 / 60;
     let frameId: number;
     function tick() {
-      setGravityMode(window.scrollY > window.innerHeight * GRAVITY_TRIGGER_FRACTION);
+      const shouldEngageGravity =
+        manualGravityOverride ?? window.scrollY > window.innerHeight * GRAVITY_TRIGGER_FRACTION;
+      setGravityMode(shouldEngageGravity);
       updateFloor();
 
       if (hasMouse) {
@@ -371,8 +468,11 @@ export function FloatingShapes() {
 
     return () => {
       cancelAnimationFrame(frameId);
+      if (scrollAnimFrame !== null) cancelAnimationFrame(scrollAnimFrame);
+      if (cooldownTimer !== null) clearTimeout(cooldownTimer);
       document.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("resize", handleResize);
+      window.removeEventListener("wheel", handleWheel);
       Composite.clear(engine.world, false);
       Engine.clear(engine);
       shapeLayer.remove();
