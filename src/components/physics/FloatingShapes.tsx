@@ -156,7 +156,11 @@ const GRAVITY_TRIGGER_FRACTION = 0.4;
 const FLOOR_MARGIN = 24;
 const MAX_FLOOR_STEP = 40;
 
-const GRAVITY_Y = 1;
+// Strong enough that shapes actually reach the floor in a couple of
+// seconds rather than drifting down for ages — matters a lot more now that
+// scrolling doubles as a page-to-page timeline (see handleWheel): nobody
+// wants to sit and wait for Internships to fall before it can auto-open.
+const GRAVITY_Y = 4;
 // Shapes bounce elastically off everything while floating (collisions
 // never lose energy — ELASTIC_RESTITUTION/FRICTION), but a small amount
 // of air resistance still bleeds a little speed out of the system over
@@ -215,8 +219,13 @@ const LAUNCH_SPEED_MIN = 9;
 const LAUNCH_SPEED_MAX = 16;
 
 // The expand/shrink panel animation and its resting size, capped so it
-// never gets absurd on a huge monitor.
-const PANEL_DURATION_MS = 650;
+// never gets absurd on a huge monitor. Closing is deliberately much
+// quicker than opening — opening is the reveal, worth lingering on;
+// closing (including the shrink half of a page-to-page swap, see
+// goToPageShape) is just clearing the way for what's next, and dragging
+// that out only makes the whole timeline feel sluggish to navigate.
+const PANEL_OPEN_DURATION_MS = 650;
+const PANEL_CLOSE_DURATION_MS = 260;
 const PANEL_MAX_WIDTH = 760;
 const PANEL_MAX_HEIGHT = 640;
 const PANEL_RADIUS = 32;
@@ -1438,12 +1447,13 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
 
     // Drives both expand and shrink: eases the panel body's size/position
     // from panelState's current live values to the given target over
-    // PANEL_DURATION_MS, scaling the real physics body every frame (so it
-    // keeps shoving other bodies out of its growing footprint) and
-    // updating the <rect>'s attributes to match — position/rotation are
-    // already handled every frame by the main tick() loop below, since
-    // bodies[index] is this same body.
-    function animatePanelTo(toHw: number, toHh: number, toX: number, toY: number, onDone?: () => void) {
+    // `durationMs` (see PANEL_OPEN_DURATION_MS/PANEL_CLOSE_DURATION_MS),
+    // scaling the real physics body every frame (so it keeps shoving other
+    // bodies out of its growing footprint) and updating the <rect>'s
+    // attributes to match — position/rotation are already handled every
+    // frame by the main tick() loop below, since bodies[index] is this
+    // same body.
+    function animatePanelTo(toHw: number, toHh: number, toX: number, toY: number, durationMs: number, onDone?: () => void) {
       const ps = panelState;
       if (!ps) return;
       const body = bodies[ps.index];
@@ -1456,7 +1466,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       let prevHw = fromHw;
       let prevHh = fromHh;
       const step = (now: number) => {
-        const t = Math.min(1, (now - startTime) / PANEL_DURATION_MS);
+        const t = Math.min(1, (now - startTime) / durationMs);
         const eased = easeInOutCubic(t);
         const hw = fromHw + (toHw - fromHw) * eased;
         const hh = fromHh + (toHh - fromHh) * eased;
@@ -1544,7 +1554,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       const targetX = window.scrollX + window.innerWidth / 2;
       const targetY = window.scrollY + window.innerHeight / 2;
 
-      animatePanelTo(targetHw, targetHh, targetX, targetY, () => {
+      animatePanelTo(targetHw, targetHh, targetX, targetY, PANEL_OPEN_DURATION_MS, () => {
         rectEl.style.fill = "var(--color-surface)";
         rectEl.setAttribute("stroke", spec.color);
         rectEl.setAttribute("stroke-width", "3");
@@ -1563,7 +1573,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       ps.rectEl.removeAttribute("stroke");
       onClosePanelRef.current?.();
 
-      animatePanelTo(ps.originHw, ps.originHh, ps.originX, ps.originY, () => {
+      animatePanelTo(ps.originHw, ps.originHh, ps.originX, ps.originY, PANEL_CLOSE_DURATION_MS, () => {
         const restored = createShapeBody(ps.spec, ps.x, ps.y);
         replaceBodyAt(ps.index, restored);
         elements[ps.index].replaceChildren(createShapeElement(ps.spec));
