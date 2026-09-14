@@ -235,6 +235,10 @@ const PANEL_CLOSE_DURATION_MS = 260;
 // truly simultaneous start produced (two rapidly resizing static bodies
 // shoving the same floating neighbors around from two directions at once).
 const PANEL_SWAP_OPEN_DELAY_MS = 120;
+// The longest any single expand/shrink/swap should ever legitimately take
+// (PANEL_OPEN_DURATION_MS + PANEL_SWAP_OPEN_DELAY_MS, plus slack) — see
+// setPanelNavigating's watchdog.
+const PANEL_NAVIGATING_WATCHDOG_MS = 3000;
 const PANEL_MAX_WIDTH = 760;
 const PANEL_MAX_HEIGHT = 640;
 const PANEL_RADIUS = 32;
@@ -1282,11 +1286,35 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
     // timeline and any manual click (see handlePointerDown) so the two
     // ways of navigating never disagree about where the visitor is.
     let pageIndex = 0;
-    // True for the whole close-then-open chain a page-to-page step runs
-    // (see goToPageShape/goToHero) — blocks another wheel tick from
-    // landing mid-chain, the same way `transitioning` blocks another
-    // hero<->bottom snap mid-animation.
+    // True for the *entire* span of any expand/shrink/swap animation (see
+    // setPanelNavigating below) — blocks another wheel tick or click from
+    // landing mid-animation, the same way `transitioning` blocks another
+    // hero<->bottom snap mid-animation. This is what actually keeps two
+    // animations from ever fighting over the same shape's body at once,
+    // which is what used to cause the panel to get stuck open (or, worse,
+    // pop back open on its own) under fast repeated scrolling/clicking.
     let panelNavigating = false;
+    // A generous safety-valve timeout, (re)armed every time
+    // setPanelNavigating(true) runs and disarmed the moment it's cleared
+    // normally — so if an animation's completion callback somehow never
+    // fires (a bug, an exception mid-animation, anything unforeseen), the
+    // lock still can't wedge the whole board unresponsive forever; it just
+    // releases on its own well after any legitimate animation would have
+    // finished.
+    let panelNavigatingWatchdog: ReturnType<typeof setTimeout> | null = null;
+    function setPanelNavigating(value: boolean) {
+      panelNavigating = value;
+      if (panelNavigatingWatchdog !== null) {
+        clearTimeout(panelNavigatingWatchdog);
+        panelNavigatingWatchdog = null;
+      }
+      if (value) {
+        panelNavigatingWatchdog = setTimeout(() => {
+          panelNavigatingWatchdog = null;
+          panelNavigating = false;
+        }, PANEL_NAVIGATING_WATCHDOG_MS);
+      }
+    }
     // The pending "start the open half" timer a swap schedules (see
     // swapPanelTo) — tracked so unmounting mid-swap can cancel it instead
     // of it firing into a torn-down world.
@@ -1296,26 +1324,42 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
     let internshipsAutoOpened = false;
     function handleInternshipsAutoOpen(event: Matter.IEventCollision<Matter.Engine>) {
       if (!gravityEngaged || internshipsAutoOpened || internshipsIndex < 0) return;
+      if (autoExpandTimer) return; // already retrying on an earlier tick's schedule
       const index = internshipsIndex;
       const body = bodies[index];
       for (const pair of event.pairs) {
         if (pair.bodyA !== body && pair.bodyB !== body) continue;
         const other = pair.bodyA === body ? pair.bodyB : pair.bodyA;
         if (other === cursorBody) continue;
-        internshipsAutoOpened = true;
-        if (!autoExpandTimer) {
-          // Deferred a tick (see AUTO_EXPAND_DELAY_MS) rather than called
-          // straight from here — this callback runs *inside* Matter's own
-          // Engine.update, and beginExpand mutates the world (swaps the
-          // body), which is asking for trouble done reentrantly, mid-step.
-          autoExpandTimer = setTimeout(() => {
-            autoExpandTimer = null;
-            if (gravityEngaged && !panelState && !transitioning) {
-              pageIndex = 1; // should already be 1 (see handleWheel) — belt and suspenders
-              beginExpand(index);
+        // Deferred a tick (see AUTO_EXPAND_DELAY_MS) rather than called
+        // straight from here — this callback runs *inside* Matter's own
+        // Engine.update, and beginExpand mutates the world (swaps the
+        // body), which is asking for trouble done reentrantly, mid-step.
+        autoExpandTimer = setTimeout(() => {
+          autoExpandTimer = null;
+          // Deliberately *not* marking internshipsAutoOpened here if this
+          // guard fails (still mid hero<->bottom snap right after landing
+          // fast on the now-much-stronger gravity, or something else
+          // already navigating) — leaving it false means the very next
+          // collisionActive tick (fires every frame while still touching
+          // anything) just retries, instead of this being a one-shot
+          // attempt that can silently miss its window and never open at
+          // all, which is exactly what used to happen sometimes.
+          if (gravityEngaged && !panelState && !transitioning && !panelNavigating) {
+            internshipsAutoOpened = true;
+            pageIndex = 1; // should already be 1 (see handleWheel) — belt and suspenders
+            setPanelNavigating(true);
+            const started = beginExpand(index, () => {
+              setPanelNavigating(false);
+            });
+            if (!started) {
+              // Shouldn't happen given the guard above, but never leave
+              // the lock stuck on if it somehow does.
+              setPanelNavigating(false);
+              internshipsAutoOpened = false;
             }
-          }, AUTO_EXPAND_DELAY_MS);
-        }
+          }
+        }, AUTO_EXPAND_DELAY_MS);
         return;
       }
     }
@@ -1529,10 +1573,14 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       activePanelAnimFrames.add(frame);
     }
 
-    function beginExpand(index: number) {
-      if (panelState || transitioning) return;
+    // Returns whether it actually started — false means the caller's own
+    // `onDone` (if any) will never fire, so callers that need to release a
+    // lock (see panelNavigating) regardless of success check this rather
+    // than assuming onDone always eventually runs.
+    function beginExpand(index: number, onDone?: () => void): boolean {
+      if (panelState || transitioning) return false;
       const spec = specs[index];
-      if (!spec.pageId) return;
+      if (!spec.pageId) return false;
       // A manual click beats the auto-open beat (see
       // handleInternshipsAutoOpen) — without this, closing a manually-
       // opened panel just before that timer fires would have it pop back
@@ -1589,7 +1637,9 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
         rectEl.setAttribute("stroke", spec.color);
         rectEl.setAttribute("stroke-width", "3");
         onOpenPanelRef.current?.(spec.pageId!, spec.color);
+        onDone?.();
       });
+      return true;
     }
 
     // onDone (used by goToHero below) runs once the shrink-back-down
@@ -1632,16 +1682,28 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
     // beat (PANEL_SWAP_OPEN_DELAY_MS) rather than in the very same instant
     // — see its comment for why.
     function swapPanelTo(shapeIndex: number) {
+      // Held for the *entire* swap, close through open — not just the
+      // close half — so a scroll or click landing anywhere in between
+      // can't start a second expand/shrink on a shape whose own animation
+      // (still running independently, see animatePanelTo) hasn't finished
+      // yet. Two animations fighting over the same body's size/position
+      // every frame is what actually produced the "popup stays stuck"
+      // reports, not the overlap itself.
+      setPanelNavigating(true);
       if (panelState) {
-        panelNavigating = true;
         beginShrink();
         swapOpenTimer = setTimeout(() => {
           swapOpenTimer = null;
-          panelNavigating = false;
-          beginExpand(shapeIndex);
+          const started = beginExpand(shapeIndex, () => {
+            setPanelNavigating(false);
+          });
+          if (!started) setPanelNavigating(false); // never leave the lock stuck on
         }, PANEL_SWAP_OPEN_DELAY_MS);
       } else {
-        beginExpand(shapeIndex);
+        const started = beginExpand(shapeIndex, () => {
+          setPanelNavigating(false);
+        });
+        if (!started) setPanelNavigating(false);
       }
     }
 
@@ -1674,7 +1736,14 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
           if (nav > 0) pageIndex = nav;
           swapPanelTo(hitIndex);
         } else {
-          beginShrink();
+          // Held for the close's own duration too — see swapPanelTo's
+          // comment for why any expand/shrink at all needs this, not just
+          // swaps: clicking the same still-animating shape again before it
+          // settles would otherwise fight its own in-flight animation.
+          setPanelNavigating(true);
+          beginShrink(() => {
+            setPanelNavigating(false);
+          });
         }
         return;
       }
@@ -1688,7 +1757,11 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       if (hitSpec.pageId) {
         const nav = pageShapeIndices.indexOf(hitIndex) + 1;
         if (nav > 0) pageIndex = nav;
-        beginExpand(hitIndex);
+        setPanelNavigating(true);
+        const started = beginExpand(hitIndex, () => {
+          setPanelNavigating(false);
+        });
+        if (!started) setPanelNavigating(false);
       } else if (hitSpec.kind === "switch") {
         toggleNightMode();
       } else if (hitSpec.kind === "glow-button") {
@@ -1755,10 +1828,18 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       atTop = true;
       manualGravityOverride = false;
       if (panelState) {
-        panelNavigating = true;
+        setPanelNavigating(true);
         beginShrink(() => {
-          panelNavigating = false;
+          setPanelNavigating(false);
         });
+      } else {
+        // Belt and suspenders: beginShrink above already tells the caller
+        // to close its panel content the instant it starts (see
+        // onClosePanelRef there), but if panelState and the caller's own
+        // open/closed state ever disagree for any reason, the landing
+        // page must never show a panel regardless — force it closed here
+        // too rather than trusting that they're in sync.
+        onClosePanelRef.current?.();
       }
       launchShapesUpward();
       animateScrollTo(0, () => {
@@ -1886,6 +1967,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       if (cooldownTimer !== null) clearTimeout(cooldownTimer);
       if (autoExpandTimer !== null) clearTimeout(autoExpandTimer);
       if (swapOpenTimer !== null) clearTimeout(swapOpenTimer);
+      if (panelNavigatingWatchdog !== null) clearTimeout(panelNavigatingWatchdog);
       for (const frame of activePanelAnimFrames) cancelAnimationFrame(frame);
       activePanelAnimFrames.clear();
       document.removeEventListener("pointermove", handlePointerMove);
