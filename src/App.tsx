@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { PlaygroundPlate } from "./components/layout/PlaygroundPlate";
 import { Footer } from "./components/layout/Footer";
 import { Hero } from "./components/sections/Hero";
@@ -30,7 +31,70 @@ interface OpenPanel {
 // *they* own.
 function App() {
   const [openPanel, setOpenPanel] = useState<OpenPanel | null>(null);
+  // Which page (if any) FloatingShapes wants a size measurement for right
+  // now — see measurePanel below. Only ever set for the handful of
+  // synchronous instants that function runs in; never lingers alongside a
+  // genuinely open panel.
+  const [measuringPageId, setMeasuringPageId] = useState<string | null>(null);
+  const measureRef = useRef<HTMLDivElement>(null);
   const { t, setLang } = useLanguage();
+
+  // Shared between the real, visible panel and the invisible measurement
+  // clone below it (see measurePanel) so the two are guaranteed to render
+  // identically — any drift between them would defeat the whole point of
+  // measuring in the first place.
+  function renderPanelBody(pageId: string) {
+    if (pageId === "internships") {
+      return (
+        <>
+          <h2 className="font-display text-2xl font-semibold text-ink sm:text-3xl">{t("internshipsTitle")}</h2>
+          <div className="mt-8">
+            <Internships />
+          </div>
+        </>
+      );
+    }
+    if (pageId === "contact") {
+      return (
+        <>
+          <h2 className="font-display text-2xl font-semibold text-ink sm:text-3xl">{t("contactTitle")}</h2>
+          <div className="mt-8">
+            <Contact />
+          </div>
+        </>
+      );
+    }
+    if (pageId === "artworks") {
+      return (
+        <>
+          <h2 className="font-display text-2xl font-semibold text-ink sm:text-3xl">{t("artworksTitle")}</h2>
+          <div className="mt-8">
+            <Artworks />
+          </div>
+        </>
+      );
+    }
+    return null;
+  }
+
+  // Called by FloatingShapes the instant a shape starts growing (see its
+  // onMeasurePanel doc comment) — renders that page's real content into an
+  // identical, invisible clone of the real panel (same classes, so the
+  // same max-w-[760px]/max-h-[78vh] constraints apply), then reads back
+  // its actual rendered pixel size synchronously so the grow animation can
+  // target that exact box instead of a generic guess. flushSync forces
+  // React to commit and lay out the clone before this function returns —
+  // without it the state update would just be scheduled, and there'd be
+  // nothing to measure yet.
+  function measurePanel(pageId: string): { width: number; height: number } | null {
+    flushSync(() => setMeasuringPageId(pageId));
+    const rect = measureRef.current?.getBoundingClientRect();
+    // Done with it immediately — the clone only ever needs to exist for
+    // this one synchronous measurement, not to linger until the real
+    // panel replaces it.
+    setMeasuringPageId(null);
+    return rect ? { width: rect.width, height: rect.height } : null;
+  }
 
   return (
     <div className="relative w-full bg-canvas">
@@ -54,6 +118,7 @@ function App() {
         onOpenPanel={(pageId, accentColor) => setOpenPanel({ pageId, accentColor })}
         onClosePanel={() => setOpenPanel(null)}
         onToggleLanguage={setLang}
+        onMeasurePanel={measurePanel}
       />
       <Footer />
 
@@ -83,30 +148,25 @@ function App() {
             // section while this panel was still reporting itself open.
             className="pointer-events-auto max-h-[78vh] w-full max-w-[760px] overflow-y-auto overscroll-contain rounded-[2rem] border-[3px] bg-surface p-8 shadow-[0_30px_60px_-20px_rgba(36,31,46,0.35)] sm:p-10"
           >
-            {openPanel.pageId === "internships" && (
-              <>
-                <h2 className="font-display text-2xl font-semibold text-ink sm:text-3xl">{t("internshipsTitle")}</h2>
-                <div className="mt-8">
-                  <Internships />
-                </div>
-              </>
-            )}
-            {openPanel.pageId === "contact" && (
-              <>
-                <h2 className="font-display text-2xl font-semibold text-ink sm:text-3xl">{t("contactTitle")}</h2>
-                <div className="mt-8">
-                  <Contact />
-                </div>
-              </>
-            )}
-            {openPanel.pageId === "artworks" && (
-              <>
-                <h2 className="font-display text-2xl font-semibold text-ink sm:text-3xl">{t("artworksTitle")}</h2>
-                <div className="mt-8">
-                  <Artworks />
-                </div>
-              </>
-            )}
+            {renderPanelBody(openPanel.pageId)}
+          </div>
+        </div>
+      )}
+
+      {/* An invisible twin of the panel above, used only to measure a
+          page's real content size before FloatingShapes' grow animation
+          starts (see measurePanel) — same wrapper/classes so the measured
+          size matches the real panel exactly, `visibility: hidden` rather
+          than `display: none` so it still lays out (and can be measured)
+          without being painted, and pointer-events-none/aria-hidden since
+          it's never meant to be seen or interacted with. */}
+      {measuringPageId && (
+        <div className="pointer-events-none fixed inset-0 z-0 flex items-center justify-center p-6" style={{ visibility: "hidden" }} aria-hidden>
+          <div
+            ref={measureRef}
+            className="w-full max-w-[760px] max-h-[78vh] overflow-y-auto rounded-[2rem] border-[3px] p-8 sm:p-10"
+          >
+            {renderPanelBody(measuringPageId)}
           </div>
         </div>
       )}

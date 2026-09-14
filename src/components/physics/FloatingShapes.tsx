@@ -247,6 +247,11 @@ const PANEL_SWAP_OPEN_DELAY_MS = 120;
 // (PANEL_OPEN_DURATION_MS + PANEL_SWAP_OPEN_DELAY_MS, plus slack) — see
 // setPanelNavigating's watchdog.
 const PANEL_NAVIGATING_WATCHDOG_MS = 3000;
+// Only a fallback for beginExpand's real target size (see onMeasurePanel) —
+// the actual grow animation targets the real panel's measured pixel size
+// whenever that's available, which in practice is always. PANEL_MAX_WIDTH
+// still matches the real panel's own max-w-[760px] (see App.tsx) so the
+// fallback and the real thing agree if this path is ever actually taken.
 const PANEL_MAX_WIDTH = 760;
 const PANEL_MAX_HEIGHT = 640;
 const PANEL_RADIUS = 32;
@@ -510,9 +515,21 @@ interface FloatingShapesProps {
    * key itself (see toggleLanguage), this just tells the rest of the app
    * (LanguageProvider) to re-render with the new copy. */
   onToggleLanguage?: (lang: Lang) => void;
+  /** Called synchronously, right before a shape starts growing, to get the
+   * *actual* pixel size that page's real content will render at (see
+   * App.tsx's hidden measurement clone) — used as the grow animation's
+   * target instead of a generic guessed size, so the shape animates
+   * straight to the exact box its real content is about to fill rather
+   * than growing to some other size and then visibly snapping to the
+   * right one the instant the real panel mounts. Expected to return
+   * synchronously (e.g. via ReactDOM.flushSync) since the animation can't
+   * start toward a target it doesn't have yet; a missing callback, or one
+   * that returns a non-positive size, falls back to a generic viewport-
+   * relative guess (see beginExpand) rather than failing to open at all. */
+  onMeasurePanel?: (pageId: string) => { width: number; height: number } | null;
 }
 
-export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: FloatingShapesProps) {
+export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage, onMeasurePanel }: FloatingShapesProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const knockoutCopyRef = useRef<HTMLHeadingElement>(null);
   // Refs rather than effect deps: the physics world below is built exactly
@@ -522,11 +539,13 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
   const onOpenPanelRef = useRef(onOpenPanel);
   const onClosePanelRef = useRef(onClosePanel);
   const onToggleLanguageRef = useRef(onToggleLanguage);
+  const onMeasurePanelRef = useRef(onMeasurePanel);
   useEffect(() => {
     onOpenPanelRef.current = onOpenPanel;
     onClosePanelRef.current = onClosePanel;
     onToggleLanguageRef.current = onToggleLanguage;
-  }, [onOpenPanel, onClosePanel, onToggleLanguage]);
+    onMeasurePanelRef.current = onMeasurePanel;
+  }, [onOpenPanel, onClosePanel, onToggleLanguage, onMeasurePanel]);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -1641,8 +1660,19 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       const ps: PanelState = { index, spec, rectEl, originX: x, originY: y, originHw: hw, originHh: hh, hw, hh, x, y };
       panelState = ps;
 
-      const targetHw = Math.min(window.innerWidth * 0.43, PANEL_MAX_WIDTH / 2);
-      const targetHh = Math.min(window.innerHeight * 0.39, PANEL_MAX_HEIGHT / 2);
+      // Grow toward the *actual* pixel size this page's real content is
+      // about to render at (see onMeasurePanel's doc comment) rather than
+      // a generic guess — that guess is still here as a fallback for the
+      // rare case there's no measurement (or a bogus one), so opening
+      // never outright fails, but every real page has real content to
+      // measure and should always take this branch in practice.
+      const measured = onMeasurePanelRef.current?.(spec.pageId!);
+      const targetHw =
+        measured && measured.width > 0 ? measured.width / 2 : Math.min(window.innerWidth * 0.43, PANEL_MAX_WIDTH / 2);
+      const targetHh =
+        measured && measured.height > 0
+          ? measured.height / 2
+          : Math.min(window.innerHeight * 0.39, PANEL_MAX_HEIGHT / 2);
       const targetX = window.scrollX + window.innerWidth / 2;
       const targetY = window.scrollY + window.innerHeight / 2;
 
