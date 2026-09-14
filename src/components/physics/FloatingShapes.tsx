@@ -1638,9 +1638,20 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       const targetY = window.scrollY + window.innerHeight / 2;
 
       animatePanelTo(ps, targetHw, targetHh, targetX, targetY, PANEL_OPEN_DURATION_MS, () => {
-        rectEl.style.fill = "var(--color-surface)";
-        rectEl.setAttribute("stroke", spec.color);
-        rectEl.setAttribute("stroke-width", "3");
+        // The React-rendered panel (see App.tsx's [data-panel-overlay]) is
+        // about to mount directly on top of this rect, at the same
+        // viewport-centered spot — but sized to its own content
+        // (max-h-[78vh], auto height below that), not to this rect's fixed
+        // targetHw/targetHh footprint. Short content (Contact's handful of
+        // link cards, say, next to Internships' much longer write-ups)
+        // leaves this rect's own surface-and-border look poking out above
+        // or below the real panel, reading as a second, empty, badly
+        // aligned frame rather than a rendering choice. Hiding this rect
+        // the instant the real panel takes over avoids needing the two to
+        // ever match sizes at all — it still fully exists as a body (so
+        // the physics/collision footprint and the shrink-back-down
+        // animation are unaffected), it just isn't drawn.
+        rectEl.style.opacity = "0";
         onOpenPanelRef.current?.(spec.pageId!, spec.color);
         onDone?.();
       });
@@ -1657,6 +1668,10 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
       const ps = panelState;
       if (!ps) return;
       panelState = null;
+      // Undoes beginExpand's opacity hide (see there) the instant the real
+      // panel content is gone, so the shrink-back-down animation below is
+      // visible again as the colored shape it actually is.
+      ps.rectEl.style.opacity = "1";
       ps.rectEl.style.fill = ps.spec.color;
       ps.rectEl.removeAttribute("stroke");
       onClosePanelRef.current?.();

@@ -24,6 +24,7 @@ export interface Strings {
   contactIntro: string;
   contactEmailLabel: string;
   contactGithubLabel: string;
+  contactLinkedinLabel: string;
   artworksLabel: string;
   artworksTitle: string;
   artworksIntro: string;
@@ -43,6 +44,7 @@ const en: Strings = {
   contactIntro: "Have a project, an opportunity, or just want to say hi? Reach out — I'd love to hear from you.",
   contactEmailLabel: "Email",
   contactGithubLabel: "GitHub",
+  contactLinkedinLabel: "LinkedIn",
   artworksLabel: "Artworks",
   artworksTitle: "Artworks",
   artworksIntro: "A few personal drawings — see the rest of my portfolio on ArtStation.",
@@ -63,6 +65,7 @@ const fr: Strings = {
     "Un projet, une opportunité, ou simplement envie de dire bonjour? Écrivez-moi — ça me ferait plaisir d'échanger.",
   contactEmailLabel: "Courriel",
   contactGithubLabel: "GitHub",
+  contactLinkedinLabel: "LinkedIn",
   artworksLabel: "Illustrations",
   artworksTitle: "Illustrations",
   artworksIntro: "Quelques dessins personnels — voyez le reste de mon portfolio sur ArtStation.",
