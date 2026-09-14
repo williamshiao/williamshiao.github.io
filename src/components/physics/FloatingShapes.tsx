@@ -100,7 +100,11 @@ import { STRINGS, type Lang } from "../../i18n/strings";
  *
  * A third special shape — a light bulb (see makeGlowButtonShape/
  * spawnGlowButton) — toggles that whole glow layer on/off, the same
- * click path as the switch and the pageId panel.
+ * click path as the switch and the pageId panel. Shelved for now (not
+ * spawned — see generateShapes), same as Ditto below, since a visitor had
+ * no way to discover glowEnabled defaulted to *on* other than the bulb
+ * itself; the glow layer now starts off and stays off until the bulb (or
+ * some other affordance) comes back.
  *
  * A second pageId shape, Contact, works exactly like Internships (see
  * above) — it's what an envelope shape and a `</>` code-badge shape used
@@ -724,12 +728,17 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
 
     // Glow on/off, toggled by the push-button (see spawnGlowButton) —
     // just hides the whole glowLayer rather than tearing down/rebuilding
-    // its contents, so turning it back on is instant.
+    // its contents, so turning it back on is instant. Defaults to *off*
+    // for a first-time visitor (only an explicit prior "true" turns it on)
+    // — the bulb that used to make this discoverable/reversible is
+    // currently shelved (see generateShapes), so a visitor with no saved
+    // preference should see the plainer, opt-in state, not an effect
+    // that's already on with no visible way to find out why or turn it off.
     let glowEnabled = (() => {
       try {
-        return localStorage.getItem("ditto-glow-enabled") !== "false";
+        return localStorage.getItem("ditto-glow-enabled") === "true";
       } catch {
-        return true;
+        return false;
       }
     })();
     let glowButton: { glassEl: SVGCircleElement; rayEls: SVGLineElement[] } | null = null;

@@ -185,18 +185,19 @@ function clampCount(value: number, min: number, max: number): number {
 const BASE_DECORATIVE_SMALL = 3;
 const BASE_DECORATIVE_BIG = 4;
 
-/** Builds the full shape list for a given viewport: 4 fixed small UI shapes
- * (switch, glow button, language) plus the three big pageId shapes
- * (Internships, Contact, Artworks) are always present regardless of size —
- * those are real features, not filler — but the purely decorative
- * population, and every shape's own size, scale with the viewport (see
- * computeShapeScale). */
+/** Builds the full shape list for a given viewport: 2 fixed small UI shapes
+ * (switch, language toggle — the glow-toggle bulb is shelved for now, see
+ * below) plus the three big pageId shapes (Internships, Contact, Artworks)
+ * are always present regardless of size — those are real features, not
+ * filler — but the purely decorative population, and every shape's own
+ * size, scale with the viewport (see computeShapeScale). */
 export function generateShapes(viewportWidth: number, viewportHeight: number): ShapeSpec[] {
   const scale = computeShapeScale(viewportWidth, viewportHeight);
   const decorativeSmallCount = clampCount(BASE_DECORATIVE_SMALL * scale, 1, 6);
   const decorativeBigCount = clampCount(BASE_DECORATIVE_BIG * scale, 2, 7);
-  // 3 fixed small shapes (switch/glow/language, filled in below) come
-  // first, then the decorative random ones.
+  // 3 fixed-position small slots (switch, then one currently-decorative
+  // slot where the glow bulb used to always be — see below —, then
+  // language) come first, then the decorative random ones.
   const smallCount = 3 + decorativeSmallCount;
   // 3 fixed pageId shapes, then the decorative random ones.
   const bigCount = 3 + decorativeBigCount;
@@ -235,9 +236,11 @@ export function generateShapes(viewportWidth: number, viewportHeight: number): S
   // makeDittoShape/dittoBlob.ts, kept but unused so it's easy to bring
   // back later.)
   if (small.length > 0) small[0] = makeLightSwitchShape(scale);
-  // And a push-button that toggles the shape glow effect, in the second.
-  if (small.length > 1) small[1] = makeGlowButtonShape(scale);
-  // And the language toggle, in the third.
+  // The glow-toggle bulb (makeGlowButtonShape) used to always take the
+  // second slot here — shelved for now (see FloatingShapes' glowEnabled
+  // comment for why), so that slot is just an ordinary decorative shape
+  // like the rest of the population until it comes back.
+  // And the language toggle, in the third slot.
   if (small.length > 2) small[2] = makeLanguageToggleShape(scale);
   return [...small, ...big];
 }
