@@ -108,6 +108,10 @@ import { STRINGS, type Lang } from "../../i18n/strings";
  * a mailto: link and a GitHub tab directly; see ../sections/Contact.tsx
  * for what's actually inside once it's open.
  *
+ * A third pageId shape, Artworks, is the same click-to-expand panel again —
+ * a small art showcase plus a link out to the full ArtStation portfolio;
+ * see ../sections/Artworks.tsx. No auto-open of its own, same as Contact.
+ *
  * One more: a little globe (see makeLanguageToggleShape/toggleLanguage)
  * flips the site's language — FloatingShapes owns reading/writing that
  * choice (localStorage, same as night mode/glow) and just reports the new
@@ -774,9 +778,10 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
     // A small hardcoded lookup rather than threading a labelKey through
     // ShapeSpec — there are only ever as many entries here as there are
     // real pages.
-    function pageLabelKeyFor(pageId: string): "internshipsLabel" | "contactLabel" | null {
+    function pageLabelKeyFor(pageId: string): "internshipsLabel" | "contactLabel" | "artworksLabel" | null {
       if (pageId === "internships") return "internshipsLabel";
       if (pageId === "contact") return "contactLabel";
+      if (pageId === "artworks") return "artworksLabel";
       return null;
     }
 
@@ -1848,6 +1853,34 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage }: 
     }
 
     function handleWheel(e: WheelEvent) {
+      // A wheel gesture over the open panel's own content (e.g. scrolling
+      // through a long Internships/Artworks list) should behave like any
+      // other scrollable element on the page, not get hijacked into a
+      // page-to-page timeline step — same exclusion handlePointerDown
+      // already uses for clicks landing inside the panel.
+      const panelEl = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-panel-overlay]");
+      if (panelEl) {
+        // Scroll the panel's content ourselves instead of letting the
+        // browser do it: once that content is scrolled to the edge a
+        // gesture is heading past, a native scroll has nowhere left to go
+        // *inside* this element for the leftover delta, and the browser's
+        // own overscroll-chaining would hand it straight to the outer
+        // page — silently moving window.scrollY (and desyncing it from
+        // pageIndex/panelState, which this whole wheel-driven timeline
+        // depends on) without this handler ever seeing it happen.
+        // `overscroll-behavior: contain` on the panel (see App.tsx) is
+        // meant to stop exactly this and normally would, but a single
+        // large wheel tick can still cross the boundary mid-event faster
+        // than the browser's own containment catches it (observed in
+        // testing as a residual few dozen pixels of drift even with that
+        // CSS in place) — always preventing the browser's default here and
+        // clamping the scroll manually removes any dependency on that
+        // being watertight in every engine.
+        e.preventDefault();
+        const max = panelEl.scrollHeight - panelEl.clientHeight;
+        panelEl.scrollTop = Math.min(max, Math.max(0, panelEl.scrollTop + e.deltaY));
+        return;
+      }
       e.preventDefault();
       if (transitioning || panelNavigating || Math.abs(e.deltaY) < WHEEL_DEADZONE) return;
       if (e.deltaY > 0) {

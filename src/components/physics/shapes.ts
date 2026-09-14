@@ -13,8 +13,8 @@
  *
  * Any shape that gets a `pageId` (see ShapeSpec) must be forced to
  * `kind: "rect"` when it's created, and given a short `label` — see
- * generateShapes for where that happens for the current two (Internships,
- * Contact).
+ * generateShapes for where that happens for the current three (Internships,
+ * Contact, Artworks).
  *
  * Every size (both the random ranges and the fixed UI shapes' own sizes)
  * is scaled by generateShapes' viewport-derived `scale` — see
@@ -186,10 +186,10 @@ const BASE_DECORATIVE_SMALL = 3;
 const BASE_DECORATIVE_BIG = 4;
 
 /** Builds the full shape list for a given viewport: 4 fixed small UI shapes
- * (switch, glow button, language) plus the two big pageId shapes
- * (Internships, Contact) are always present regardless of size — those are
- * real features, not filler — but the purely decorative population, and
- * every shape's own size, scale with the viewport (see
+ * (switch, glow button, language) plus the three big pageId shapes
+ * (Internships, Contact, Artworks) are always present regardless of size —
+ * those are real features, not filler — but the purely decorative
+ * population, and every shape's own size, scale with the viewport (see
  * computeShapeScale). */
 export function generateShapes(viewportWidth: number, viewportHeight: number): ShapeSpec[] {
   const scale = computeShapeScale(viewportWidth, viewportHeight);
@@ -198,18 +198,18 @@ export function generateShapes(viewportWidth: number, viewportHeight: number): S
   // 3 fixed small shapes (switch/glow/language, filled in below) come
   // first, then the decorative random ones.
   const smallCount = 3 + decorativeSmallCount;
-  // 2 fixed pageId shapes, then the decorative random ones.
-  const bigCount = 2 + decorativeBigCount;
+  // 3 fixed pageId shapes, then the decorative random ones.
+  const bigCount = 3 + decorativeBigCount;
 
   const small = Array.from({ length: smallCount }, (_, i) => makeShape(`small-${i}`, false, "small", SMALL_SIZE, scale));
-  // The first two big shapes are always plain rects, not randomly picked —
-  // they're the ones that open a real page (Internships, Contact — see
-  // FloatingShapes' click-to-expand), and forcing them to already be the
-  // same kind the expand animation turns everything into is what keeps
+  // The first three big shapes are always plain rects, not randomly picked —
+  // they're the ones that open a real page (Internships, Contact, Artworks
+  // — see FloatingShapes' click-to-expand), and forcing them to already be
+  // the same kind the expand animation turns everything into is what keeps
   // that transition seamless rather than snapping from round/triangular
   // to rectangular the instant it starts growing.
   const big = Array.from({ length: bigCount }, (_, i) =>
-    makeShape(`big-${i}`, true, "big", BIG_SIZE, scale, i === 0 || i === 1 ? "rect" : undefined),
+    makeShape(`big-${i}`, true, "big", BIG_SIZE, scale, i === 0 || i === 1 || i === 2 ? "rect" : undefined),
   );
   if (big.length > 0) {
     big[0].pageId = "internships";
@@ -222,6 +222,13 @@ export function generateShapes(viewportWidth: number, viewportHeight: number): S
   if (big.length > 1) {
     big[1].pageId = "contact";
     big[1].label = "Contact";
+  }
+  // The art showcase — personal drawings plus a link out to the full
+  // ArtStation portfolio (see ../sections/Artworks.tsx). Third page in the
+  // scroll timeline, right after Contact.
+  if (big.length > 2) {
+    big[2].pageId = "artworks";
+    big[2].label = "Artworks";
   }
   // One guaranteed light switch, always in the first small slot — see
   // FloatingShapes' toggleNightMode. (Ditto is shelved for now — see

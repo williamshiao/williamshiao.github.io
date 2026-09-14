@@ -24,6 +24,10 @@ export interface Strings {
   contactIntro: string;
   contactEmailLabel: string;
   contactGithubLabel: string;
+  artworksLabel: string;
+  artworksTitle: string;
+  artworksIntro: string;
+  artworksArtstationLabel: string;
 }
 
 const en: Strings = {
@@ -39,6 +43,10 @@ const en: Strings = {
   contactIntro: "Have a project, an opportunity, or just want to say hi? Reach out — I'd love to hear from you.",
   contactEmailLabel: "Email",
   contactGithubLabel: "GitHub",
+  artworksLabel: "Artworks",
+  artworksTitle: "Artworks",
+  artworksIntro: "A few personal drawings — see the rest of my portfolio on ArtStation.",
+  artworksArtstationLabel: "View full portfolio on ArtStation",
 };
 
 const fr: Strings = {
@@ -55,6 +63,10 @@ const fr: Strings = {
     "Un projet, une opportunité, ou simplement envie de dire bonjour? Écrivez-moi — ça me ferait plaisir d'échanger.",
   contactEmailLabel: "Courriel",
   contactGithubLabel: "GitHub",
+  artworksLabel: "Illustrations",
+  artworksTitle: "Illustrations",
+  artworksIntro: "Quelques dessins personnels — voyez le reste de mon portfolio sur ArtStation.",
+  artworksArtstationLabel: "Voir le portfolio complet sur ArtStation",
 };
 
 export const STRINGS: Record<Lang, Strings> = { en, fr };

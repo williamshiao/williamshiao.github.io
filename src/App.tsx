@@ -4,6 +4,7 @@ import { Footer } from "./components/layout/Footer";
 import { Hero } from "./components/sections/Hero";
 import { Internships } from "./components/sections/Internships";
 import { Contact } from "./components/sections/Contact";
+import { Artworks } from "./components/sections/Artworks";
 import { FloatingShapes } from "./components/physics/FloatingShapes";
 import { useLanguage } from "./context/LanguageContext";
 
@@ -12,11 +13,12 @@ interface OpenPanel {
   accentColor: string;
 }
 
-// Tabs/panels (TabBar, ContentPanel, Artworks, config/tabs) are shelved for
-// now, not deleted — Internships is the first one wired up for real, via
-// FloatingShapes' click-to-expand: clicking its shape grows it in place
-// into a panel and reports back here (onOpenPanel) once that finishes, at
-// which point this renders the actual page content on top of it. See
+// The old tab-bar-driven layout (TabBar, ContentPanel, config/tabs) is
+// shelved, not deleted — every real page (Internships, Contact, Artworks)
+// is wired up instead via FloatingShapes' click-to-expand: clicking its
+// shape grows it in place into a panel and reports back here (onOpenPanel)
+// once that finishes, at which point this renders the actual page content
+// on top of it. See
 // FloatingShapes for the rest of the physics (zero-g at the top, gravity
 // engages once scrolled down far enough, and the floor then tracks the
 // current viewport bottom so settled shapes are never scrolled out of view).
@@ -67,7 +69,19 @@ function App() {
           <div
             data-panel-overlay
             style={{ borderColor: openPanel.accentColor }}
-            className="pointer-events-auto max-h-[78vh] w-full max-w-[760px] overflow-y-auto rounded-[2rem] border-[3px] bg-surface p-8 shadow-[0_30px_60px_-20px_rgba(36,31,46,0.35)] sm:p-10"
+            // overscroll-contain matters here, not just niceness: without it,
+            // once this panel's own content is scrolled to its top or bottom
+            // edge (e.g. after browsing all the way through a long Artworks
+            // gallery), a further wheel gesture in the same direction has
+            // nowhere left to go *inside* this div, so the browser's native
+            // overscroll-chaining hands the rest of that scroll straight to
+            // the outer page — completely bypassing FloatingShapes' wheel
+            // handler (see its "let the panel's own scroll behave normally"
+            // exclusion), which is the one place pageIndex/panelState stay
+            // in sync with window.scrollY. That desync is exactly what let
+            // a chained scroll silently carry the page back to the hero
+            // section while this panel was still reporting itself open.
+            className="pointer-events-auto max-h-[78vh] w-full max-w-[760px] overflow-y-auto overscroll-contain rounded-[2rem] border-[3px] bg-surface p-8 shadow-[0_30px_60px_-20px_rgba(36,31,46,0.35)] sm:p-10"
           >
             {openPanel.pageId === "internships" && (
               <>
@@ -82,6 +96,14 @@ function App() {
                 <h2 className="font-display text-2xl font-semibold text-ink sm:text-3xl">{t("contactTitle")}</h2>
                 <div className="mt-8">
                   <Contact />
+                </div>
+              </>
+            )}
+            {openPanel.pageId === "artworks" && (
+              <>
+                <h2 className="font-display text-2xl font-semibold text-ink sm:text-3xl">{t("artworksTitle")}</h2>
+                <div className="mt-8">
+                  <Artworks />
                 </div>
               </>
             )}
