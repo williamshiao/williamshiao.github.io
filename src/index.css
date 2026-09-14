@@ -53,3 +53,20 @@
     letter-spacing: -0.01em;
   }
 }
+
+/* A page-shape's panel content (see App.tsx) fades in on mount rather than
+   snapping to full opacity the instant the shape finishes growing into it
+   — the panel's own background color has already smoothly transitioned to
+   match by then (see FloatingShapes' beginExpand), so this is just the
+   readable content settling in a beat after, not a color change of its
+   own. A small upward drift reads as "arriving", not just "appearing". */
+@keyframes panel-content-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

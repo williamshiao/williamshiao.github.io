@@ -10,6 +10,7 @@ import {
   type DittoBlobState,
 } from "./dittoBlob";
 import { STRINGS, type Lang } from "../../i18n/strings";
+import { panelBackgroundTint } from "../../utils/color";
 
 /**
  * A physics playground spanning one continuous, seamless plate (see
@@ -1647,8 +1648,22 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage, on
       rectEl.setAttribute("y", String(-hh));
       rectEl.setAttribute("rx", String(Math.min(hw, hh, PANEL_RADIUS)));
       rectEl.setAttribute("fill", spec.color);
-      rectEl.style.transition = "fill 0.35s ease";
+      rectEl.style.transition = `fill ${PANEL_OPEN_DURATION_MS}ms ease`;
       elements[index].replaceChildren(rectEl);
+      // Forces the browser to commit the fill set above *before* the
+      // transition target below changes it again — without this, a value
+      // set twice on a still-uncommitted new element can collapse into a
+      // single jump straight to the final color instead of an actual
+      // transition (the classic "new element, no visible transition"
+      // pitfall). The reflow itself is otherwise a no-op here.
+      void rectEl.getBoundingClientRect();
+      // Kicked off in the same frame the grow animation below starts, over
+      // the same duration, so the shape's own saturated color and the
+      // subtle panel-tint background it's about to become arrive together
+      // — see panelBackgroundTint's comment for why this is the exact
+      // color the real panel (App.tsx) uses too, and beginShrink for the
+      // reverse.
+      rectEl.style.fill = panelBackgroundTint(spec.color);
       // A glowing UI panel would read as a bug, not a feature, and the
       // label's job is done the instant it's actually been clicked.
       if (glowElements[index]) glowElements[index]!.style.display = "none";
@@ -1711,8 +1726,16 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage, on
       // panel content is gone, so the shrink-back-down animation below is
       // visible again as the colored shape it actually is.
       ps.rectEl.style.opacity = "1";
-      ps.rectEl.style.fill = ps.spec.color;
       ps.rectEl.removeAttribute("stroke");
+      // Reverses beginExpand's fill transition: the rect's been sitting at
+      // the subtle panel tint the whole time it was open (that transition
+      // finished well before now), so this smoothly brings it back to its
+      // own resting color over the same span as the shrink animation below
+      // instead of snapping the instant the close starts — see beginExpand
+      // for why the reflow is needed for the transition to actually play.
+      ps.rectEl.style.transition = `fill ${PANEL_CLOSE_DURATION_MS}ms ease`;
+      void ps.rectEl.getBoundingClientRect();
+      ps.rectEl.style.fill = ps.spec.color;
       onClosePanelRef.current?.();
 
       animatePanelTo(ps, ps.originHw, ps.originHh, ps.originX, ps.originY, PANEL_CLOSE_DURATION_MS, () => {

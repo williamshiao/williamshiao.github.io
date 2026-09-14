@@ -8,6 +8,7 @@ import { Contact } from "./components/sections/Contact";
 import { Artworks } from "./components/sections/Artworks";
 import { FloatingShapes } from "./components/physics/FloatingShapes";
 import { useLanguage } from "./context/LanguageContext";
+import { panelBackgroundTint } from "./utils/color";
 
 interface OpenPanel {
   pageId: string;
@@ -133,7 +134,7 @@ function App() {
         <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center p-6">
           <div
             data-panel-overlay
-            style={{ borderColor: openPanel.accentColor }}
+            style={{ borderColor: openPanel.accentColor, backgroundColor: panelBackgroundTint(openPanel.accentColor) }}
             // overscroll-contain matters here, not just niceness: without it,
             // once this panel's own content is scrolled to its top or bottom
             // edge (e.g. after browsing all the way through a long Artworks
@@ -146,9 +147,20 @@ function App() {
             // in sync with window.scrollY. That desync is exactly what let
             // a chained scroll silently carry the page back to the hero
             // section while this panel was still reporting itself open.
-            className="pointer-events-auto max-h-[78vh] w-full max-w-[760px] overflow-y-auto overscroll-contain rounded-[2rem] border-[3px] bg-surface p-8 shadow-[0_30px_60px_-20px_rgba(36,31,46,0.35)] sm:p-10"
+            className="pointer-events-auto max-h-[78vh] w-full max-w-[760px] overflow-y-auto overscroll-contain rounded-[2rem] border-[3px] p-8 shadow-[0_30px_60px_-20px_rgba(36,31,46,0.35)] sm:p-10"
           >
-            {renderPanelBody(openPanel.pageId)}
+            {/* Fades in on every mount (a fresh one each time a panel opens
+                — see FloatingShapes' beginExpand/beginShrink comments for
+                why this box's own background is a plain, already-settled
+                color rather than something that also needs animating: the
+                shape's fill has already smoothly transitioned to this exact
+                color, in parallel with the grow animation, by the time this
+                mounts) so the actual readable content still arrives gently
+                rather than snapping in the instant the shape finishes
+                growing. See index.css's panel-content-in keyframes. */}
+            <div key={openPanel.pageId} className="animate-[panel-content-in_320ms_ease_both]">
+              {renderPanelBody(openPanel.pageId)}
+            </div>
           </div>
         </div>
       )}
