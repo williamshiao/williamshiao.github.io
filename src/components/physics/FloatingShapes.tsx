@@ -75,9 +75,9 @@ import { panelBackgroundTint } from "../../utils/color";
  * opacity snap the moment gravity engages. The system cursor turns into
  * a pointer over anything that really does something on click (a pageId
  * shape, the switch, the glow button), not just anything that merely
- * darkens on hover. The Internships shape specifically also opens
+ * darkens on hover. The Journey shape specifically also opens
  * *itself*, no click needed, the moment it collides with anything once
- * it's down on the second page (see handleInternshipsAutoOpen) — a
+ * it's down on the second page (see handleJourneyAutoOpen) — a
  * one-time demonstration that clicking a shape does something real,
  * rather than leaving a visitor to discover that on their own; Contact
  * (below) doesn't get that same auto-open, just the regular click.
@@ -107,15 +107,13 @@ import { panelBackgroundTint } from "../../utils/color";
  * itself; the glow layer now starts off and stays off until the bulb (or
  * some other affordance) comes back.
  *
- * A second pageId shape, Contact, works exactly like Internships (see
- * above) — it's what an envelope shape and a `</>` code-badge shape used
- * to be, before they were folded into one real page instead of firing off
- * a mailto: link and a GitHub tab directly; see ../sections/Contact.tsx
- * for what's actually inside once it's open.
- *
- * A third pageId shape, Artworks, is the same click-to-expand panel again —
- * a small art showcase plus a link out to the full ArtStation portfolio;
- * see ../sections/Artworks.tsx. No auto-open of its own, same as Contact.
+ * The other pageId shapes — Projects, Artworks and Contact — work exactly
+ * like Journey (see above), minus the auto-open: just the regular click.
+ * Contact is what an envelope shape and a `</>` code-badge shape used to
+ * be, before they were folded into one real page instead of firing off a
+ * mailto: link and a GitHub tab directly; see ../sections/Contact.tsx,
+ * ../sections/Artworks.tsx and ../sections/Projects.tsx for what's
+ * actually inside each once it's open.
  *
  * One more: a little globe (see makeLanguageToggleShape/toggleLanguage)
  * flips the site's language — FloatingShapes owns reading/writing that
@@ -168,7 +166,7 @@ const MAX_FLOOR_STEP = 40;
 // Strong enough that shapes actually reach the floor in a couple of
 // seconds rather than drifting down for ages — matters a lot more now that
 // scrolling doubles as a page-to-page timeline (see handleWheel): nobody
-// wants to sit and wait for Internships to fall before it can auto-open.
+// wants to sit and wait for Journey to fall before it can auto-open.
 const GRAVITY_Y = 4;
 // Shapes bounce elastically off everything while floating (collisions
 // never lose energy — ELASTIC_RESTITUTION/FRICTION), but a small amount
@@ -194,8 +192,8 @@ const HOVER_FILTER = "brightness(0.72)";
 // opacity change on it (hiding again, expand/shrink) stays snappy.
 const LABEL_REVEAL_MS = 1400;
 const LABEL_HIDE_MS = 200;
-// Internships opens itself the instant it collides with anything on the
-// second page (see handleInternshipsAutoOpen) — 0ms, not actually
+// Journey opens itself the instant it collides with anything on the
+// second page (see handleJourneyAutoOpen) — 0ms, not actually
 // synchronous: it's still deferred a tick via setTimeout rather than
 // called straight from the collision callback, since that callback runs
 // *inside* Matter's own Engine.update, and beginExpand mutates the world
@@ -698,7 +696,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage, on
     // during the *current* fall — cleared on every disengage so the same
     // dramatic beat replays each time it scrolls down and lands again.
     const landedLabelIndices = new Set<number>();
-    // Pending auto-open of Internships (see handleInternshipsAutoOpen) —
+    // Pending auto-open of Journey (see handleJourneyAutoOpen) —
     // tracked so scrolling back up before it fires can cancel it instead of
     // popping the panel open after the user's already left.
     let autoExpandTimer: ReturnType<typeof setTimeout> | null = null;
@@ -807,8 +805,11 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage, on
     // A small hardcoded lookup rather than threading a labelKey through
     // ShapeSpec — there are only ever as many entries here as there are
     // real pages.
-    function pageLabelKeyFor(pageId: string): "internshipsLabel" | "contactLabel" | "artworksLabel" | null {
-      if (pageId === "internships") return "internshipsLabel";
+    function pageLabelKeyFor(
+      pageId: string,
+    ): "journeyLabel" | "projectsLabel" | "contactLabel" | "artworksLabel" | null {
+      if (pageId === "journey") return "journeyLabel";
+      if (pageId === "projects") return "projectsLabel";
       if (pageId === "contact") return "contactLabel";
       if (pageId === "artworks") return "artworksLabel";
       return null;
@@ -1292,7 +1293,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage, on
     }
     Events.on(engine, "collisionStart", handleFloorCollision);
 
-    // Internships opens itself once it's down on the second page — see the
+    // Journey opens itself once it's down on the second page — see the
     // FloatingShapes intro comment for why (demonstrating the click-to-open
     // trick rather than leaving a visitor to find it). Deliberately *not*
     // tied to the same "real ground landing" collisionStart the label
@@ -1305,8 +1306,8 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage, on
     // it regardless of exactly when or how contact started. Only the
     // cursor doesn't count as "anything"; every wall and every other shape
     // does, per "the moment it collides with anything" once it's arrived.
-    // Every pageId shape, in spawn order (Internships, then Contact, then
-    // whatever gets added after it in ./shapes) — the scroll-driven
+    // Every pageId shape, in spawn order (see PAGE_SHAPES in ./shapes for
+    // the actual order, and for where any new page would be added) — the scroll-driven
     // timeline below (see handleWheel/goToPageShape) steps through these
     // one at a time, in order, regardless of where each one actually
     // happens to be sitting on the board.
@@ -1354,12 +1355,12 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage, on
     // of it firing into a torn-down world.
     let swapOpenTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const internshipsIndex = specs.findIndex((s) => s.pageId === "internships");
-    let internshipsAutoOpened = false;
-    function handleInternshipsAutoOpen(event: Matter.IEventCollision<Matter.Engine>) {
-      if (!gravityEngaged || internshipsAutoOpened || internshipsIndex < 0) return;
+    const journeyIndex = specs.findIndex((s) => s.pageId === "journey");
+    let journeyAutoOpened = false;
+    function handleJourneyAutoOpen(event: Matter.IEventCollision<Matter.Engine>) {
+      if (!gravityEngaged || journeyAutoOpened || journeyIndex < 0) return;
       if (autoExpandTimer) return; // already retrying on an earlier tick's schedule
-      const index = internshipsIndex;
+      const index = journeyIndex;
       const body = bodies[index];
       for (const pair of event.pairs) {
         if (pair.bodyA !== body && pair.bodyB !== body) continue;
@@ -1371,7 +1372,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage, on
         // body), which is asking for trouble done reentrantly, mid-step.
         autoExpandTimer = setTimeout(() => {
           autoExpandTimer = null;
-          // Deliberately *not* marking internshipsAutoOpened here if this
+          // Deliberately *not* marking journeyAutoOpened here if this
           // guard fails (still mid hero<->bottom snap right after landing
           // fast on the now-much-stronger gravity, or something else
           // already navigating) — leaving it false means the very next
@@ -1380,7 +1381,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage, on
           // attempt that can silently miss its window and never open at
           // all, which is exactly what used to happen sometimes.
           if (gravityEngaged && !panelState && !transitioning && !panelNavigating) {
-            internshipsAutoOpened = true;
+            journeyAutoOpened = true;
             pageIndex = 1; // should already be 1 (see handleWheel) — belt and suspenders
             setPanelNavigating(true);
             const started = beginExpand(index, () => {
@@ -1390,15 +1391,15 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage, on
               // Shouldn't happen given the guard above, but never leave
               // the lock stuck on if it somehow does.
               setPanelNavigating(false);
-              internshipsAutoOpened = false;
+              journeyAutoOpened = false;
             }
           }
         }, AUTO_EXPAND_DELAY_MS);
         return;
       }
     }
-    Events.on(engine, "collisionActive", handleInternshipsAutoOpen);
-    Events.on(engine, "collisionStart", handleInternshipsAutoOpen);
+    Events.on(engine, "collisionActive", handleJourneyAutoOpen);
+    Events.on(engine, "collisionStart", handleJourneyAutoOpen);
 
     // The cursor is a real physics body — heavy relative to the shapes, and
     // manually driven to the mouse's *document* position every frame
@@ -1455,10 +1456,10 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage, on
         }
         landedLabelIndices.clear();
         // Scrolling back up before the auto-open beat fires (see
-        // handleInternshipsAutoOpen) cancels it — it should never pop the
+        // handleJourneyAutoOpen) cancels it — it should never pop the
         // panel open once the shape's already been launched back into
         // zero-g, and it should replay next time it comes back down.
-        internshipsAutoOpened = false;
+        journeyAutoOpened = false;
         if (autoExpandTimer) {
           clearTimeout(autoExpandTimer);
           autoExpandTimer = null;
@@ -1616,7 +1617,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage, on
       const spec = specs[index];
       if (!spec.pageId) return false;
       // A manual click beats the auto-open beat (see
-      // handleInternshipsAutoOpen) — without this, closing a manually-
+      // handleJourneyAutoOpen) — without this, closing a manually-
       // opened panel just before that timer fires would have it pop back
       // open on its own right after.
       if (autoExpandTimer) {
@@ -1697,7 +1698,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage, on
         // viewport-centered spot — but sized to its own content
         // (max-h-[78vh], auto height below that), not to this rect's fixed
         // targetHw/targetHh footprint. Short content (Contact's handful of
-        // link cards, say, next to Internships' much longer write-ups)
+        // link cards, say, next to Journey's much longer timeline)
         // leaves this rect's own surface-and-border look poking out above
         // or below the real panel, reading as a second, empty, badly
         // aligned frame rather than a rendering choice. Hiding this rect
@@ -1931,7 +1932,7 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage, on
 
     function handleWheel(e: WheelEvent) {
       // A wheel gesture over the open panel's own content (e.g. scrolling
-      // through a long Internships/Artworks list) should behave like any
+      // through a long Journey/Artworks list) should behave like any
       // other scrollable element on the page, not get hijacked into a
       // page-to-page timeline step — same exclusion handlePointerDown
       // already uses for clicks landing inside the panel.
@@ -1962,8 +1963,8 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage, on
       if (transitioning || panelNavigating || Math.abs(e.deltaY) < WHEEL_DEADZONE) return;
       if (e.deltaY > 0) {
         if (atTop) {
-          // hero -> page 1: Internships opens itself once it actually
-          // lands (see handleInternshipsAutoOpen), not from here directly.
+          // hero -> page 1: Journey opens itself once it actually
+          // lands (see handleJourneyAutoOpen), not from here directly.
           atTop = false;
           pageIndex = 1;
           animateScrollTo(window.innerHeight);
@@ -2085,8 +2086,8 @@ export function FloatingShapes({ onOpenPanel, onClosePanel, onToggleLanguage, on
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("wheel", handleWheel);
       Events.off(engine, "collisionStart", handleFloorCollision);
-      Events.off(engine, "collisionActive", handleInternshipsAutoOpen);
-      Events.off(engine, "collisionStart", handleInternshipsAutoOpen);
+      Events.off(engine, "collisionActive", handleJourneyAutoOpen);
+      Events.off(engine, "collisionStart", handleJourneyAutoOpen);
       Composite.clear(engine.world, false);
       Engine.clear(engine);
       defs.remove();

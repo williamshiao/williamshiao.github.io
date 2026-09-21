@@ -1,8 +1,7 @@
 import type { ComponentType } from "react";
 import { Artworks } from "../components/sections/Artworks";
-import { Internships } from "../components/sections/Internships";
 
-export type TabId = "about" | "artworks" | "internships";
+export type TabId = "about" | "artworks";
 
 export interface NavTab {
   id: TabId;
@@ -23,11 +22,8 @@ export interface PanelConfig {
 export const NAV_TABS: NavTab[] = [
   { id: "about", label: "About" },
   { id: "artworks", label: "Artworks" },
-  { id: "internships", label: "Internships" },
 ];
 
-// Whether the Internships tab stays is still undecided (see project brief).
-// To drop it: delete this entry and its NAV_TABS entry above.
 export const PANELS: PanelConfig[] = [
   {
     id: "artworks",
@@ -35,12 +31,5 @@ export const PANELS: PanelConfig[] = [
     kicker: "Personal drawings",
     title: "Artworks",
     component: Artworks,
-  },
-  {
-    id: "internships",
-    label: "Internships",
-    kicker: "Where I've worked",
-    title: "Internship Experience",
-    component: Internships,
   },
 ];

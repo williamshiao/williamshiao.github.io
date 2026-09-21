@@ -13,8 +13,8 @@
  *
  * Any shape that gets a `pageId` (see ShapeSpec) must be forced to
  * `kind: "rect"` when it's created, and given a short `label` — see
- * generateShapes for where that happens for the current three (Internships,
- * Contact, Artworks).
+ * generateShapes for where that happens for the current four (Journey,
+ * Projects, Artworks, Contact).
  *
  * Every size (both the random ranges and the fixed UI shapes' own sizes)
  * is scaled by generateShapes' viewport-derived `scale` — see
@@ -183,14 +183,27 @@ function clampCount(value: number, min: number, max: number): number {
 // actually tuned/tested at, so a "typical desktop" visitor sees the same
 // board as before; everyone else's count scales proportionally from here.
 const BASE_DECORATIVE_SMALL = 3;
-const BASE_DECORATIVE_BIG = 4;
+const BASE_DECORATIVE_BIG = 3;
+
+// The pages that get a fixed big shape, in scroll-timeline order (see
+// FloatingShapes' pageShapeIndices — it follows spawn order, which is this
+// order): the first is the one that opens itself on landing, and Contact
+// deliberately comes last as where the tour ends. The label is only the
+// English default — FloatingShapes swaps in the current language's own
+// copy (see its pageLabelKeyFor).
+const PAGE_SHAPES: { pageId: string; label: string }[] = [
+  { pageId: "journey", label: "Journey" },
+  { pageId: "projects", label: "Projects" },
+  { pageId: "artworks", label: "Artworks" },
+  { pageId: "contact", label: "Contact" },
+];
 
 /** Builds the full shape list for a given viewport: 2 fixed small UI shapes
  * (switch, language toggle — the glow-toggle bulb is shelved for now, see
- * below) plus the three big pageId shapes (Internships, Contact, Artworks)
- * are always present regardless of size — those are real features, not
- * filler — but the purely decorative population, and every shape's own
- * size, scale with the viewport (see computeShapeScale). */
+ * below) plus the four big pageId shapes (Journey, Projects, Artworks,
+ * Contact) are always present regardless of size — those are real
+ * features, not filler — but the purely decorative population, and every
+ * shape's own size, scale with the viewport (see computeShapeScale). */
 export function generateShapes(viewportWidth: number, viewportHeight: number): ShapeSpec[] {
   const scale = computeShapeScale(viewportWidth, viewportHeight);
   const decorativeSmallCount = clampCount(BASE_DECORATIVE_SMALL * scale, 1, 6);
@@ -199,38 +212,25 @@ export function generateShapes(viewportWidth: number, viewportHeight: number): S
   // slot where the glow bulb used to always be — see below —, then
   // language) come first, then the decorative random ones.
   const smallCount = 3 + decorativeSmallCount;
-  // 3 fixed pageId shapes, then the decorative random ones.
-  const bigCount = 3 + decorativeBigCount;
+  // One fixed pageId shape per entry in PAGE_SHAPES, then the decorative
+  // random ones.
+  const bigCount = PAGE_SHAPES.length + decorativeBigCount;
 
   const small = Array.from({ length: smallCount }, (_, i) => makeShape(`small-${i}`, false, "small", SMALL_SIZE, scale));
-  // The first three big shapes are always plain rects, not randomly picked —
-  // they're the ones that open a real page (Internships, Contact, Artworks
-  // — see FloatingShapes' click-to-expand), and forcing them to already be
-  // the same kind the expand animation turns everything into is what keeps
+  // The first big shapes are always plain rects, not randomly picked —
+  // they're the ones that open a real page (see PAGE_SHAPES and
+  // FloatingShapes' click-to-expand), and forcing them to already be the
+  // same kind the expand animation turns everything into is what keeps
   // that transition seamless rather than snapping from round/triangular
   // to rectangular the instant it starts growing.
   const big = Array.from({ length: bigCount }, (_, i) =>
-    makeShape(`big-${i}`, true, "big", BIG_SIZE, scale, i === 0 || i === 1 || i === 2 ? "rect" : undefined),
+    makeShape(`big-${i}`, true, "big", BIG_SIZE, scale, i < PAGE_SHAPES.length ? "rect" : undefined),
   );
-  if (big.length > 0) {
-    big[0].pageId = "internships";
-    big[0].label = "Internships";
-  }
-  // Consolidates what used to be two separate shapes (an envelope opening
-  // a mailto: link, a code badge opening GitHub in a new tab) into one
-  // real page, the same click-to-expand way Internships works — see
-  // ../sections/Contact.tsx for what's actually inside.
-  if (big.length > 1) {
-    big[1].pageId = "contact";
-    big[1].label = "Contact";
-  }
-  // The art showcase — personal drawings plus a link out to the full
-  // ArtStation portfolio (see ../sections/Artworks.tsx). Third page in the
-  // scroll timeline, right after Contact.
-  if (big.length > 2) {
-    big[2].pageId = "artworks";
-    big[2].label = "Artworks";
-  }
+  PAGE_SHAPES.forEach((page, i) => {
+    if (i >= big.length) return;
+    big[i].pageId = page.pageId;
+    big[i].label = page.label;
+  });
   // One guaranteed light switch, always in the first small slot — see
   // FloatingShapes' toggleNightMode. (Ditto is shelved for now — see
   // makeDittoShape/dittoBlob.ts, kept but unused so it's easy to bring

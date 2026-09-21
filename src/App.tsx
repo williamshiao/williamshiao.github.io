@@ -3,7 +3,8 @@ import { flushSync } from "react-dom";
 import { PlaygroundPlate } from "./components/layout/PlaygroundPlate";
 import { Footer } from "./components/layout/Footer";
 import { Hero } from "./components/sections/Hero";
-import { Internships } from "./components/sections/Internships";
+import { Journey } from "./components/sections/Journey";
+import { Projects } from "./components/sections/Projects";
 import { Contact } from "./components/sections/Contact";
 import { Artworks } from "./components/sections/Artworks";
 import { FloatingShapes } from "./components/physics/FloatingShapes";
@@ -16,7 +17,7 @@ interface OpenPanel {
 }
 
 // The old tab-bar-driven layout (TabBar, ContentPanel, config/tabs) is
-// shelved, not deleted — every real page (Internships, Contact, Artworks)
+// shelved, not deleted — every real page (Journey, Projects, Artworks, Contact)
 // is wired up instead via FloatingShapes' click-to-expand: clicking its
 // shape grows it in place into a panel and reports back here (onOpenPanel)
 // once that finishes, at which point this renders the actual page content
@@ -45,12 +46,22 @@ function App() {
   // identically — any drift between them would defeat the whole point of
   // measuring in the first place.
   function renderPanelBody(pageId: string) {
-    if (pageId === "internships") {
+    if (pageId === "journey") {
       return (
         <>
-          <h2 className="font-display text-2xl font-semibold text-ink sm:text-3xl">{t("internshipsTitle")}</h2>
+          <h2 className="font-display text-2xl font-semibold text-ink sm:text-3xl">{t("journeyTitle")}</h2>
           <div className="mt-8">
-            <Internships />
+            <Journey />
+          </div>
+        </>
+      );
+    }
+    if (pageId === "projects") {
+      return (
+        <>
+          <h2 className="font-display text-2xl font-semibold text-ink sm:text-3xl">{t("projectsTitle")}</h2>
+          <div className="mt-8">
+            <Projects />
           </div>
         </>
       );
@@ -107,11 +118,8 @@ function App() {
         </div>
 
         <div className="pointer-events-none absolute inset-x-4 top-[100dvh] z-10 flex h-dvh flex-col items-center pt-16 text-center sm:inset-x-10 sm:pt-24">
-          <p className="font-pixel text-xs uppercase tracking-widest text-ditto sm:text-sm">{t("comingDownToLand")}</p>
-          <h2 className="mt-4 font-display text-3xl font-semibold text-ink sm:text-4xl">
-            {/* TODO(content): once every shape has a real page, replace this placeholder. */}
-            {t("soonSite")}
-          </h2>
+          <p className="font-pixel text-xs uppercase tracking-widest text-ditto sm:text-sm">{t("pageHintKicker")}</p>
+          <h2 className="mt-4 font-display text-3xl font-semibold text-ink sm:text-4xl">{t("pageHintTitle")}</h2>
         </div>
       </div>
 

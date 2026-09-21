@@ -14,7 +14,7 @@ function ArtstationMarkIcon() {
 
 // A small art showcase — a handful of personal drawings plus a prominent
 // link out to the full ArtStation portfolio (see ../../data/artworks). Same
-// click-to-expand panel treatment as Internships/Contact (see
+// click-to-expand panel treatment as Journey/Contact (see
 // ../physics/FloatingShapes' "artworks" pageId).
 export function Artworks() {
   const { t } = useLanguage();
